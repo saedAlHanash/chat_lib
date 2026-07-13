@@ -115,16 +115,7 @@ class FirebaseChatCore {
   Future<bool> createMe(String id, String name, String email) async {
     try {
       await createUserInFirestore(
-        types.User(
-          id: id,
-          firstName: name,
-          imageUrl: '',
-          lastName: '',
-          role: types.Role.user,
-          metadata: {
-            'email': email,
-          },
-        ),
+        types.User(id: id, firstName: name, imageUrl: '', lastName: '', role: types.Role.user, metadata: {'email': email}),
       );
       return true;
     } catch (_) {
@@ -237,9 +228,7 @@ class FirebaseChatCore {
 
   /// Sets the current user's online state in a room.
   Future<void> setMyState(types.Room room, bool isOnline) async {
-    await _firestore.collection(_config.roomsCollection).doc(room.id).update({
-      'isOnline$currentUserId': isOnline,
-    });
+    await _firestore.collection(_config.roomsCollection).doc(room.id).update({'isOnline$currentUserId': isOnline});
   }
 
   // --- Messages Operations ---
@@ -255,10 +244,7 @@ class FirebaseChatCore {
 
   /// Deletes a message (soft delete).
   Future<void> deleteMessage(String messageId, String roomId) async {
-    await _firestore
-        .collection('${_config.roomsCollection}/$roomId/messages')
-        .doc(messageId)
-        .update({
+    await _firestore.collection('${_config.roomsCollection}/$roomId/messages').doc(messageId).update({
       'updatedAt': FieldValue.serverTimestamp(),
       'metadata': {'isDeleted': true},
     });
@@ -337,9 +323,7 @@ class FirebaseChatCore {
       messageMap['createdAt'] = FieldValue.serverTimestamp();
       messageMap['updatedAt'] = FieldValue.serverTimestamp();
 
-      await _firestore
-          .collection('${_config.roomsCollection}/$roomId/messages')
-          .add(messageMap);
+      await _firestore.collection('${_config.roomsCollection}/$roomId/messages').add(messageMap);
 
       await _firestore.collection(_config.roomsCollection).doc(roomId).update({
         'updatedAt': FieldValue.serverTimestamp(),
@@ -364,20 +348,21 @@ class FirebaseChatCore {
     // 2. Query Firestore and update cache + emit
     StreamSubscription? subscription;
     try {
-      subscription = roomsQuery(Timestamp.fromMillisecondsSinceEpoch(0))
-          .snapshots()
-          .listen((snapshot) async {
-        final rooms = await _processRoomsQuery(snapshot);
-        if (rooms.isNotEmpty) {
-          await ChatCacheManager.instance.saveRooms(currentUserId, rooms);
-          final updatedCached = await ChatCacheManager.instance.getCachedRooms(currentUserId);
-          if (!controller.isClosed) {
-            controller.add(updatedCached);
+      subscription = roomsQuery(Timestamp.fromMillisecondsSinceEpoch(0)).snapshots().listen(
+        (snapshot) async {
+          final rooms = await _processRoomsQuery(snapshot);
+          if (rooms.isNotEmpty) {
+            await ChatCacheManager.instance.saveRooms(currentUserId, rooms);
+            final updatedCached = await ChatCacheManager.instance.getCachedRooms(currentUserId);
+            if (!controller.isClosed) {
+              controller.add(updatedCached);
+            }
           }
-        }
-      }, onError: (err) {
-        if (!controller.isClosed) controller.addError(err);
-      });
+        },
+        onError: (err) {
+          if (!controller.isClosed) controller.addError(err);
+        },
+      );
     } catch (e) {
       controller.addError(e);
     }
@@ -405,39 +390,40 @@ class FirebaseChatCore {
     // 2. Query Firestore and update cache + emit
     StreamSubscription? subscription;
     try {
-      subscription = messagesQuery(Timestamp.fromMillisecondsSinceEpoch(0), roomId)
-          .snapshots()
-          .listen((snapshot) async {
-        final messagesList = <Map<String, dynamic>>[];
-        for (final doc in snapshot.docs) {
-          final data = doc.data();
-          final authorId = data['authorId'] as String?;
-          if (authorId != null) {
-            final author = await fetchUser(authorId);
-            data['author'] = author.toJson();
-            data['createdAt'] = data['createdAt'] is Timestamp
-                ? (data['createdAt'] as Timestamp).millisecondsSinceEpoch
-                : (data['createdAt'] ?? 0);
-            data['id'] = doc.id;
-            data['updatedAt'] = data['updatedAt'] is Timestamp
-                ? (data['updatedAt'] as Timestamp).millisecondsSinceEpoch
-                : (data['updatedAt'] ?? 0);
-            messagesList.add(data);
+      subscription = messagesQuery(Timestamp.fromMillisecondsSinceEpoch(0), roomId).snapshots().listen(
+        (snapshot) async {
+          final messagesList = <Map<String, dynamic>>[];
+          for (final doc in snapshot.docs) {
+            final data = doc.data();
+            final authorId = data['authorId'] as String?;
+            if (authorId != null) {
+              final author = await fetchUser(authorId);
+              data['author'] = author.toJson();
+              data['createdAt'] = data['createdAt'] is Timestamp
+                  ? (data['createdAt'] as Timestamp).millisecondsSinceEpoch
+                  : (data['createdAt'] ?? 0);
+              data['id'] = doc.id;
+              data['updatedAt'] = data['updatedAt'] is Timestamp
+                  ? (data['updatedAt'] as Timestamp).millisecondsSinceEpoch
+                  : (data['updatedAt'] ?? 0);
+              messagesList.add(data);
+            }
           }
-        }
 
-        if (messagesList.isNotEmpty) {
-          await ChatCacheManager.instance.saveMessages(roomId, currentUserId, messagesList);
-          final updatedCached = await ChatCacheManager.instance.getCachedMessages(roomId, currentUserId);
-          // Sort newest first
-          updatedCached.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
-          if (!controller.isClosed) {
-            controller.add(updatedCached);
+          if (messagesList.isNotEmpty) {
+            await ChatCacheManager.instance.saveMessages(roomId, currentUserId, messagesList);
+            final updatedCached = await ChatCacheManager.instance.getCachedMessages(roomId, currentUserId);
+            // Sort newest first
+            updatedCached.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
+            if (!controller.isClosed) {
+              controller.add(updatedCached);
+            }
           }
-        }
-      }, onError: (err) {
-        if (!controller.isClosed) controller.addError(err);
-      });
+        },
+        onError: (err) {
+          if (!controller.isClosed) controller.addError(err);
+        },
+      );
     } catch (e) {
       controller.addError(e);
     }
@@ -472,9 +458,7 @@ class FirebaseChatCore {
     final userIds = data['userIds'] as List<dynamic>;
 
     final users = await Future.wait(userIds.map((userId) => fetchUser(userId as String)));
-    final otherUserId = userIds
-        .firstWhereOrNull((uId) => uId.toString() != currentUserId)
-        ?.toString();
+    final otherUserId = userIds.firstWhereOrNull((uId) => uId.toString() != currentUserId)?.toString();
     final otherUser = users.firstWhereOrNull((u) => u.id != currentUserId);
 
     if (type == types.RoomType.direct.toShortString() && otherUser != null) {
@@ -506,9 +490,7 @@ class FirebaseChatCore {
     // Set latest seen metadata
     final Map<String, dynamic> metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
     final latestSeenVal = data['latestSeen$currentUserId'];
-    metadata['latestSeen'] = latestSeenVal is Timestamp
-        ? latestSeenVal.millisecondsSinceEpoch
-        : (latestSeenVal ?? 0);
+    metadata['latestSeen'] = latestSeenVal is Timestamp ? latestSeenVal.millisecondsSinceEpoch : (latestSeenVal ?? 0);
     metadata['latestSeen$currentUserId'] = metadata['latestSeen'];
 
     // Set online status metadata
@@ -564,7 +546,10 @@ class FirebaseChatCore {
   /// Gets the list of sent welcome message IDs.
   Future<List<int>> getSentWelcomeMessagesIds() async {
     try {
-      final doc = await _firestore.collection('${_config.isTestMode ? 'test_' : ''}sentMessagesIds').doc(currentUserId).get();
+      final doc = await _firestore
+          .collection('${_config.isTestMode ? 'test_' : ''}sentMessagesIds')
+          .doc(currentUserId)
+          .get();
       final data = doc.data();
       return List<int>.from(data?['ids'] ?? []);
     } catch (_) {
@@ -574,8 +559,6 @@ class FirebaseChatCore {
 
   /// Sets the list of sent welcome message IDs.
   Future<void> addSentWelcomeMessagesId(List<int> ids) async {
-    await _firestore.collection('${_config.isTestMode ? 'test_' : ''}sentMessagesIds').doc(currentUserId).set({
-      'ids': ids,
-    });
+    await _firestore.collection('${_config.isTestMode ? 'test_' : ''}sentMessagesIds').doc(currentUserId).set({'ids': ids});
   }
 }
