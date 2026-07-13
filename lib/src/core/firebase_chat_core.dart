@@ -47,6 +47,15 @@ class FirebaseChatCore {
     }
   }
 
+  /// Uploads a file using the configured [uploadDelegate].
+  Future<String> uploadFile(String filePath, {String? mimeType, Map<String, dynamic>? customArgs}) async {
+    _checkInitialized();
+    if (_config.uploadDelegate == null) {
+      throw StateError('uploadDelegate is not configured.');
+    }
+    return await _config.uploadDelegate!(filePath, mimeType: mimeType, customArgs: customArgs);
+  }
+
   // --- Users Operations ---
 
   /// Creates a User in Firestore.

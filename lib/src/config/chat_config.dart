@@ -25,7 +25,7 @@ class ChatConfig {
   /// When a message with local attachments (image, audio, file) is sent, the library
   /// calls this delegate to upload the file to any storage service (e.g. custom server, S3, Firebase Storage)
   /// and returns the uploaded file URL.
-  final Future<String> Function(String filePath, {String? mimeType})? uploadDelegate;
+  final Future<String> Function(String filePath, {String? mimeType, Map<String, dynamic>? customArgs})? uploadDelegate;
 
   ChatConfig({
     required this.firestore,
