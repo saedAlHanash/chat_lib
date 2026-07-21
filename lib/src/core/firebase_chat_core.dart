@@ -210,6 +210,224 @@ class FirebaseChatCore {
     return room;
   }
 
+  /// Creates a group chatroom with a name, optional image, users, and sets creator as admin.
+  Future<types.Room> createGroupRoom({
+    required String name,
+    String? imageUrl,
+    List<types.User> users = const [],
+    Map<String, dynamic>? metadata,
+  }) async {
+    final userIds = {currentUserId, ...users.map((u) => u.id)}.toList();
+    final userRoles = <String, String>{
+      currentUserId: types.Role.admin.toShortString(),
+    };
+    final userPermissions = <String, Map<String, dynamic>>{
+      currentUserId: {
+        'canSendMessages': true,
+        'canSendMedia': true,
+        'isBanned': false,
+      },
+    };
+
+    for (final u in users) {
+      userRoles[u.id] = types.Role.user.toShortString();
+      userPermissions[u.id] = {
+        'canSendMessages': true,
+        'canSendMedia': true,
+        'isBanned': false,
+      };
+    }
+
+    final initialMetadata = <String, dynamic>{
+      ...?metadata,
+      'adminId': currentUserId,
+      'userRoles': userRoles,
+      'userPermissions': userPermissions,
+    };
+
+    final docRef = await _firestore.collection(_config.roomsCollection).add({
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'type': types.RoomType.group.toShortString(),
+      'userIds': userIds,
+      'userRoles': userRoles,
+      'name': name,
+      'imageUrl': imageUrl,
+      'metadata': initialMetadata,
+    });
+
+    final docSnap = await docRef.get();
+    final room = await _processRoomDocument(docSnap);
+    await ChatCacheManager.instance.saveRoom(currentUserId, room);
+    return room;
+  }
+
+  /// Adds users to an existing group room.
+  Future<void> addUsersToGroup(String roomId, List<types.User> newUsers) async {
+    final docRef = _firestore.collection(_config.roomsCollection).doc(roomId);
+    final docSnap = await docRef.get();
+    if (!docSnap.exists) return;
+
+    final data = docSnap.data() ?? {};
+    final userIds = List<String>.from(data['userIds'] ?? []);
+    final userRoles = Map<String, dynamic>.from(data['userRoles'] ?? {});
+    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
+    final userPermissions = Map<String, dynamic>.from(metadata['userPermissions'] ?? {});
+
+    for (final u in newUsers) {
+      if (!userIds.contains(u.id)) {
+        userIds.add(u.id);
+      }
+      userRoles[u.id] = types.Role.user.toShortString();
+      userPermissions[u.id] = {
+        'canSendMessages': true,
+        'canSendMedia': true,
+        'isBanned': false,
+      };
+    }
+
+    metadata['userRoles'] = userRoles;
+    metadata['userPermissions'] = userPermissions;
+
+    await docRef.update({
+      'userIds': userIds,
+      'userRoles': userRoles,
+      'metadata': metadata,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Removes a user from a group room.
+  Future<void> removeUserFromGroup(String roomId, String userId) async {
+    final docRef = _firestore.collection(_config.roomsCollection).doc(roomId);
+    final docSnap = await docRef.get();
+    if (!docSnap.exists) return;
+
+    final data = docSnap.data() ?? {};
+    final userIds = List<String>.from(data['userIds'] ?? []);
+    final userRoles = Map<String, dynamic>.from(data['userRoles'] ?? {});
+    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
+    final userPermissions = Map<String, dynamic>.from(metadata['userPermissions'] ?? {});
+
+    userIds.remove(userId);
+    userRoles.remove(userId);
+    userPermissions.remove(userId);
+
+    metadata['userRoles'] = userRoles;
+    metadata['userPermissions'] = userPermissions;
+
+    await docRef.update({
+      'userIds': userIds,
+      'userRoles': userRoles,
+      'metadata': metadata,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Adds users by their String IDs to an existing group room.
+  Future<void> addUsersToGroupByIds(String roomId, List<String> newUserIds) async {
+    final docRef = _firestore.collection(_config.roomsCollection).doc(roomId);
+    final docSnap = await docRef.get();
+    if (!docSnap.exists) return;
+
+    final data = docSnap.data() ?? {};
+    final userIds = List<String>.from(data['userIds'] ?? []);
+    final userRoles = Map<String, dynamic>.from(data['userRoles'] ?? {});
+    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
+    final userPermissions = Map<String, dynamic>.from(metadata['userPermissions'] ?? {});
+
+    for (final id in newUserIds) {
+      if (!userIds.contains(id)) {
+        userIds.add(id);
+      }
+      userRoles[id] = types.Role.user.toShortString();
+      userPermissions[id] = {
+        'canSendMessages': true,
+        'canSendMedia': true,
+        'isBanned': false,
+      };
+    }
+
+    metadata['userRoles'] = userRoles;
+    metadata['userPermissions'] = userPermissions;
+
+    await docRef.update({
+      'userIds': userIds,
+      'userRoles': userRoles,
+      'metadata': metadata,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Leaves a group room for the current user.
+  Future<void> leaveGroup(String roomId) async {
+    await removeUserFromGroup(roomId, currentUserId);
+  }
+
+  /// Updates user role in a group room (e.g. promote to admin or demote to user).
+  Future<void> updateUserGroupRole(String roomId, String userId, types.Role role) async {
+    final docRef = _firestore.collection(_config.roomsCollection).doc(roomId);
+    final docSnap = await docRef.get();
+    if (!docSnap.exists) return;
+
+    final data = docSnap.data() ?? {};
+    final userRoles = Map<String, dynamic>.from(data['userRoles'] ?? {});
+    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
+
+    userRoles[userId] = role.toShortString();
+    metadata['userRoles'] = userRoles;
+
+    await docRef.update({
+      'userRoles': userRoles,
+      'metadata': metadata,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Updates user group permissions (canSendMessages, canSendMedia, isBanned).
+  Future<void> updateUserGroupPermissions(
+    String roomId,
+    String userId, {
+    bool? canSendMessages,
+    bool? canSendMedia,
+    bool? isBanned,
+  }) async {
+    final docRef = _firestore.collection(_config.roomsCollection).doc(roomId);
+    final docSnap = await docRef.get();
+    if (!docSnap.exists) return;
+
+    final data = docSnap.data() ?? {};
+    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
+    final userPermissions = Map<String, dynamic>.from(metadata['userPermissions'] ?? {});
+    final currentPerms = Map<String, dynamic>.from(userPermissions[userId] ?? {
+      'canSendMessages': true,
+      'canSendMedia': true,
+      'isBanned': false,
+    });
+
+    if (canSendMessages != null) currentPerms['canSendMessages'] = canSendMessages;
+    if (canSendMedia != null) currentPerms['canSendMedia'] = canSendMedia;
+    if (isBanned != null) currentPerms['isBanned'] = isBanned;
+
+    userPermissions[userId] = currentPerms;
+    metadata['userPermissions'] = userPermissions;
+
+    await docRef.update({
+      'metadata': metadata,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Bans a user from a group room (sets isBanned = true).
+  Future<void> banUserFromGroup(String roomId, String userId) async {
+    await updateUserGroupPermissions(roomId, userId, isBanned: true, canSendMessages: false, canSendMedia: false);
+  }
+
+  /// Unbans a user from a group room (sets isBanned = false).
+  Future<void> unbanUserFromGroup(String roomId, String userId) async {
+    await updateUserGroupPermissions(roomId, userId, isBanned: false, canSendMessages: true, canSendMedia: true);
+  }
+
   /// Updates the latest seen timestamp for the current user in a room.
   Future<void> latestSeenRoom(types.Room room) async {
     await _firestore.collection(_config.roomsCollection).doc(room.id).update({
@@ -253,6 +471,33 @@ class FirebaseChatCore {
   /// Sends a message, supports delegate file upload if needed.
   Future<void> sendMessage(dynamic partialMessage, String roomId, {String? senderId}) async {
     final finalSenderId = senderId ?? currentUserId;
+
+    // Check group permissions if group room
+    final roomDoc = await _firestore.collection(_config.roomsCollection).doc(roomId).get();
+    if (roomDoc.exists) {
+      final roomData = roomDoc.data() ?? {};
+      if (roomData['type'] == types.RoomType.group.toShortString()) {
+        final metadata = roomData['metadata'] as Map<String, dynamic>? ?? {};
+        final userPermissions = metadata['userPermissions'] as Map<String, dynamic>? ?? {};
+        final perms = userPermissions[finalSenderId] as Map<String, dynamic>?;
+
+        if (perms != null) {
+          if (perms['isBanned'] == true) {
+            throw StateError('User is banned from this group.');
+          }
+          if (perms['canSendMessages'] == false) {
+            throw StateError('User is restricted from sending messages in this group.');
+          }
+          final isMedia = partialMessage is types.PartialFile ||
+              partialMessage is types.PartialImage ||
+              partialMessage is types.PartialAudio;
+          if (isMedia && perms['canSendMedia'] == false) {
+            throw StateError('User is restricted from sending media in this group.');
+          }
+        }
+      }
+    }
+
     types.Message? message;
 
     // Handle File Upload delegation if needed
@@ -489,6 +734,9 @@ class FirebaseChatCore {
 
     // Set latest seen metadata
     final Map<String, dynamic> metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
+    if (data['userRoles'] != null && metadata['userRoles'] == null) {
+      metadata['userRoles'] = data['userRoles'];
+    }
     final latestSeenVal = data['latestSeen$currentUserId'];
     metadata['latestSeen'] = latestSeenVal is Timestamp ? latestSeenVal.millisecondsSinceEpoch : (latestSeenVal ?? 0);
     metadata['latestSeen$currentUserId'] = metadata['latestSeen'];

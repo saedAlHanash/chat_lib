@@ -34,4 +34,59 @@ extension RoomLibExtension on types.Room {
 
   /// Checks if the room is a customer support chat (checks if any user ID is '0').
   bool get isSupport => users.any((e) => e.id == '0');
+
+  /// Checks if room is a group room.
+  bool get isGroup => type == types.RoomType.group;
+
+  /// Checks if a user (defaults to current user) is an admin in this room.
+  bool isAdmin([String? targetUserId]) {
+    final uid = targetUserId ?? currentUserId;
+    final userRoles = metadata?['userRoles'] as Map<String, dynamic>?;
+    if (userRoles != null && userRoles[uid] != null) {
+      return userRoles[uid] == 'admin';
+    }
+    final adminId = metadata?['adminId'] as String?;
+    if (adminId == uid) return true;
+    for (final u in users) {
+      if (u.id == uid && u.role == types.Role.admin) return true;
+    }
+    return false;
+  }
+
+  /// Gets permissions map for a target user.
+  Map<String, dynamic>? getUserPermissions([String? targetUserId]) {
+    final uid = targetUserId ?? currentUserId;
+    final permissions = metadata?['userPermissions'] as Map<String, dynamic>?;
+    if (permissions != null && permissions[uid] != null) {
+      return Map<String, dynamic>.from(permissions[uid]);
+    }
+    return null;
+  }
+
+  /// Checks if a user is allowed to send text messages in this group.
+  bool canSendMessages([String? targetUserId]) {
+    final perms = getUserPermissions(targetUserId);
+    if (perms != null && perms.containsKey('canSendMessages')) {
+      return perms['canSendMessages'] == true;
+    }
+    return true;
+  }
+
+  /// Checks if a user is allowed to send media/attachments in this group.
+  bool canSendMedia([String? targetUserId]) {
+    final perms = getUserPermissions(targetUserId);
+    if (perms != null && perms.containsKey('canSendMedia')) {
+      return perms['canSendMedia'] == true;
+    }
+    return true;
+  }
+
+  /// Checks if a user is banned from this group.
+  bool isBanned([String? targetUserId]) {
+    final perms = getUserPermissions(targetUserId);
+    if (perms != null && perms.containsKey('isBanned')) {
+      return perms['isBanned'] == true;
+    }
+    return false;
+  }
 }
