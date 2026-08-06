@@ -451,10 +451,18 @@ class FirebaseChatCore {
 
   // --- Messages Operations ---
 
+  String _getCollectionForRoom(String roomId) {
+    if (roomId.startsWith('group_bundle_')) {
+      return groupSessionCollection;
+    }
+    return _config.roomsCollection;
+  }
+
   /// Query for messages in a room.
   Query<Map<String, dynamic>> messagesQuery(Timestamp updateTime, String roomId) {
+    final collection = _getCollectionForRoom(roomId);
     return _firestore
-        .collection('${_config.roomsCollection}/$roomId/messages')
+        .collection('$collection/$roomId/messages')
         .orderBy('createdAt', descending: true)
         .limit(100)
         .where('updatedAt', isGreaterThan: updateTime);
@@ -462,7 +470,8 @@ class FirebaseChatCore {
 
   /// Deletes a message (soft delete).
   Future<void> deleteMessage(String messageId, String roomId) async {
-    await _firestore.collection('${_config.roomsCollection}/$roomId/messages').doc(messageId).update({
+    final collection = _getCollectionForRoom(roomId);
+    await _firestore.collection('$collection/$roomId/messages').doc(messageId).update({
       'updatedAt': FieldValue.serverTimestamp(),
       'metadata': {'isDeleted': true},
     });
@@ -471,9 +480,10 @@ class FirebaseChatCore {
   /// Sends a message, supports delegate file upload if needed.
   Future<void> sendMessage(dynamic partialMessage, String roomId, {String? senderId}) async {
     final finalSenderId = senderId ?? currentUserId;
+    final collection = _getCollectionForRoom(roomId);
 
     // Check group permissions if group room
-    final roomDoc = await _firestore.collection(_config.roomsCollection).doc(roomId).get();
+    final roomDoc = await _firestore.collection(collection).doc(roomId).get();
     if (roomDoc.exists) {
       final roomData = roomDoc.data() ?? {};
       if (roomData['type'] == types.RoomType.group.toShortString()) {
@@ -568,9 +578,9 @@ class FirebaseChatCore {
       messageMap['createdAt'] = FieldValue.serverTimestamp();
       messageMap['updatedAt'] = FieldValue.serverTimestamp();
 
-      await _firestore.collection('${_config.roomsCollection}/$roomId/messages').add(messageMap);
+      await _firestore.collection('$collection/$roomId/messages').add(messageMap);
 
-      await _firestore.collection(_config.roomsCollection).doc(roomId).update({
+      await _firestore.collection(collection).doc(roomId).update({
         'updatedAt': FieldValue.serverTimestamp(),
         'latestMessage': messageMap,
       });
@@ -595,20 +605,30 @@ class FirebaseChatCore {
     try {
       subscription = roomsQuery(Timestamp.fromMillisecondsSinceEpoch(0)).snapshots().listen(
         (snapshot) async {
-          final rooms = await _processRoomsQuery(snapshot);
-          if (rooms.isNotEmpty) {
-            await ChatCacheManager.instance.saveRooms(currentUserId, rooms);
-            final updatedCached = await ChatCacheManager.instance.getCachedRooms(currentUserId);
-            if (!controller.isClosed) {
-              controller.add(updatedCached);
+          try {
+            final rooms = await _processRoomsQuery(snapshot);
+            if (rooms.isNotEmpty) {
+              await ChatCacheManager.instance.saveRooms(currentUserId, rooms);
+              final updatedCached = await ChatCacheManager.instance.getCachedRooms(currentUserId);
+              if (!controller.isClosed) {
+                controller.add(updatedCached);
+              }
+            } else if (!controller.isClosed) {
+              controller.add([]);
             }
+          } catch (e, st) {
+            print('❌ [FirebaseChatCore _processRoomsQuery Error]: $e');
+            print(st);
+            if (!controller.isClosed) controller.addError(e);
           }
         },
         onError: (err) {
+          print('❌ [FirebaseChatCore roomsQuery onError]: $err');
           if (!controller.isClosed) controller.addError(err);
         },
       );
     } catch (e) {
+      print('❌ [FirebaseChatCore getRoomsStream catch]: $e');
       controller.addError(e);
     }
 
@@ -617,6 +637,142 @@ class FirebaseChatCore {
     };
 
     return controller.stream;
+  }
+
+  /// Direct one-time fetch of rooms for the current user from Firestore.
+  Future<List<types.Room>> getRooms() async {
+    try {
+      print('🔍 [getRooms] Querying Firestore for userIds arrayContains "$currentUserId"...');
+
+      final querySnapshot = await _firestore
+          .collection(_config.roomsCollection)
+          .where('userIds', arrayContains: currentUserId)
+          .get();
+
+      print('🔍 [getRooms] Found ${querySnapshot.docs.length} raw room document(s) in Firestore.');
+
+      final rooms = await _processRoomsQuery(querySnapshot);
+      print('🔍 [getRooms] Processed ${rooms.length} room object(s).');
+
+      if (rooms.isNotEmpty) {
+        await ChatCacheManager.instance.saveRooms(currentUserId, rooms);
+      }
+      return rooms;
+    } catch (e, st) {
+      print('❌ [FirebaseChatCore getRooms Error]: $e');
+      print(st);
+      rethrow;
+    }
+  }
+
+  // --- Group Session Rooms (Collection: group_session_rooms) ---
+
+  static const String groupSessionCollection = 'group_session_rooms';
+
+  /// Emits a stream of group session rooms for current user from collection 'group_session_rooms'.
+  Stream<List<types.Room>> getGroupSessionRoomsStream() {
+    final controller = StreamController<List<types.Room>>.broadcast();
+
+    StreamSubscription? subscription;
+    try {
+      subscription = _firestore
+          .collection(groupSessionCollection)
+          .where('userIds', arrayContains: currentUserId)
+          .snapshots()
+          .listen(
+        (snapshot) async {
+          try {
+            final rooms = await _processRoomsQuery(snapshot);
+            if (!controller.isClosed) {
+              controller.add(rooms);
+            }
+          } catch (e) {
+            print('❌ [FirebaseChatCore getGroupSessionRoomsStream process Error]: $e');
+            if (!controller.isClosed) controller.addError(e);
+          }
+        },
+        onError: (err) {
+          print('❌ [FirebaseChatCore getGroupSessionRoomsStream onError]: $err');
+          if (!controller.isClosed) controller.addError(err);
+        },
+      );
+    } catch (e) {
+      print('❌ [FirebaseChatCore getGroupSessionRoomsStream catch]: $e');
+      controller.addError(e);
+    }
+
+    controller.onCancel = () {
+      subscription?.cancel();
+    };
+
+    return controller.stream;
+  }
+
+  /// Direct one-time fetch of group session rooms for current user from collection 'group_session_rooms'.
+  Future<List<types.Room>> getGroupSessionRooms() async {
+    try {
+      final querySnapshot = await _firestore
+          .collection(groupSessionCollection)
+          .where('userIds', arrayContains: currentUserId)
+          .get();
+
+      return await _processRoomsQuery(querySnapshot);
+    } catch (e, st) {
+      print('❌ [FirebaseChatCore getGroupSessionRooms Error]: $e');
+      print(st);
+      return [];
+    }
+  }
+
+  /// Mute/Unmute a member in a Group Session Room (Admin action).
+  Future<void> muteMemberInGroupSession(String roomId, String userId, bool isMuted) async {
+    final docRef = _firestore.collection(groupSessionCollection).doc(roomId);
+    final docSnap = await docRef.get();
+    if (!docSnap.exists) return;
+
+    final data = docSnap.data() ?? {};
+    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
+    final userPermissions = Map<String, dynamic>.from(metadata['userPermissions'] ?? {});
+
+    userPermissions[userId] = {
+      'canSendMessages': !isMuted,
+      'canSendMedia': !isMuted,
+      'isBanned': isMuted,
+    };
+
+    metadata['userPermissions'] = userPermissions;
+
+    await docRef.update({
+      'metadata': metadata,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Remove/Kick a member from a Group Session Room (Admin action).
+  Future<void> removeMemberFromGroupSession(String roomId, String userId) async {
+    final docRef = _firestore.collection(groupSessionCollection).doc(roomId);
+    final docSnap = await docRef.get();
+    if (!docSnap.exists) return;
+
+    final data = docSnap.data() ?? {};
+    final userIds = List<String>.from(data['userIds'] ?? []);
+    final userRoles = Map<String, dynamic>.from(data['userRoles'] ?? {});
+    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
+    final userPermissions = Map<String, dynamic>.from(metadata['userPermissions'] ?? {});
+
+    userIds.remove(userId);
+    userRoles.remove(userId);
+    userPermissions.remove(userId);
+
+    metadata['userRoles'] = userRoles;
+    metadata['userPermissions'] = userPermissions;
+
+    await docRef.update({
+      'userIds': userIds,
+      'userRoles': userRoles,
+      'metadata': metadata,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
   }
 
   /// Emits a stream of messages in a room, synchronized with Firestore and cached locally.
