@@ -1,5 +1,6 @@
 import 'package:hive_ce_flutter/hive_ce_flutter.dart';
 import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
+import '../extensions/chat_extensions.dart';
 
 /// Manages local caching for rooms and messages using Hive CE.
 class ChatCacheManager {
@@ -50,25 +51,45 @@ class ChatCacheManager {
     final box = await _openRoomsBox(userId);
     final map = <String, Map>{};
     for (final room in rooms) {
-      map[room.id] = room.toJson();
+      if (room.shouldHideForUser(userId)) {
+        await box.delete(room.id);
+      } else {
+        map[room.id] = room.toJson();
+      }
     }
-    await box.putAll(map);
+    if (map.isNotEmpty) {
+      await box.putAll(map);
+    }
   }
 
   /// Updates or inserts a single room in the cache.
   Future<void> saveRoom(String userId, types.Room room) async {
     final box = await _openRoomsBox(userId);
-    await box.put(room.id, room.toJson());
+    if (room.shouldHideForUser(userId)) {
+      await box.delete(room.id);
+    } else {
+      await box.put(room.id, room.toJson());
+    }
   }
 
-  /// Retrieves all cached rooms for the current user.
+  /// Removes a room from local cache.
+  Future<void> deleteRoomFromCache(String userId, String roomId) async {
+    final box = await _openRoomsBox(userId);
+    await box.delete(roomId);
+    await clearRoomMessages(roomId, userId);
+  }
+
+  /// Retrieves all cached rooms for the current user (filters out deleted or removed rooms).
   Future<List<types.Room>> getCachedRooms(String userId) async {
     final box = await _openRoomsBox(userId);
     final List<types.Room> rooms = [];
     for (final value in box.values) {
       try {
         final castedMap = Map<String, dynamic>.from(value);
-        rooms.add(types.Room.fromJson(castedMap));
+        final room = types.Room.fromJson(castedMap);
+        if (!room.shouldHideForUser(userId)) {
+          rooms.add(room);
+        }
       } catch (e) {
         // Skip malformed entries
       }

@@ -15,6 +15,9 @@ class ChatConfig {
   /// Name of the rooms collection in Firestore (default: 'rooms').
   final String roomsCollectionName;
 
+  /// Name of the group session rooms collection in Firestore (default: 'group_session_rooms').
+  final String groupSessionRoomsCollectionName;
+
   /// Name of the users collection in Firestore (default: 'users').
   final String usersCollectionName;
 
@@ -31,6 +34,7 @@ class ChatConfig {
     required this.firestore,
     required this.currentUserId,
     this.roomsCollectionName = 'rooms',
+    this.groupSessionRoomsCollectionName = 'group_session_rooms',
     this.usersCollectionName = 'users',
     this.isTestMode = false,
     this.uploadDelegate,
@@ -38,6 +42,9 @@ class ChatConfig {
 
   /// Helper to get rooms collection name with test prefix if test mode is enabled
   String get roomsCollection => '${isTestMode ? 'test_' : ''}$roomsCollectionName';
+
+  /// Helper to get group session rooms collection name with test prefix if test mode is enabled
+  String get groupSessionRoomsCollection => '${isTestMode ? 'test_' : ''}$groupSessionRoomsCollectionName';
 
   /// Helper to get users collection name with test prefix if test mode is enabled
   String get usersCollection => '${isTestMode ? 'test_' : ''}$usersCollectionName';

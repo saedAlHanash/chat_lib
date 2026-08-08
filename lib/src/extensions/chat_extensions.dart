@@ -89,4 +89,27 @@ extension RoomLibExtension on types.Room {
     }
     return false;
   }
+
+  /// Checks if the entire room is soft-deleted.
+  bool get isDeleted => metadata?['isDeleted'] == true;
+
+  /// Checks if a user is marked as removed, left, or inactive in this group.
+  bool isUserRemoved([String? targetUserId]) {
+    final uid = targetUserId ?? currentUserId;
+    final removedUserIds = List<String>.from(metadata?['removedUserIds'] ?? []);
+    final outUserIds = List<String>.from(metadata?['outUserIds'] ?? []);
+    if (removedUserIds.contains(uid) || outUserIds.contains(uid)) return true;
+
+    final perms = getUserPermissions(uid);
+    if (perms != null) {
+      if (perms['isRemoved'] == true || perms['isOut'] == true) return true;
+    }
+    return false;
+  }
+
+  /// Determines if this room should be hidden/filtered out for the target user.
+  bool shouldHideForUser([String? targetUserId]) {
+    final uid = targetUserId ?? currentUserId;
+    return isDeleted || isUserRemoved(uid);
+  }
 }

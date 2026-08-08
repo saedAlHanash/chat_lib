@@ -2,17 +2,24 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
+import '../../chat_lib.dart';
 import '../config/chat_config.dart';
 import '../cache/chat_cache_manager.dart';
 
 /// Role enum extension helper
 extension _RoleToString on types.Role {
-  String toShortString() => toString().split('.').last;
+  String toShortString() =>
+      toString()
+          .split('.')
+          .last;
 }
 
 /// RoomType enum extension helper
 extension _RoomTypeToString on types.RoomType {
-  String toShortString() => toString().split('.').last;
+  String toShortString() =>
+      toString()
+          .split('.')
+          .last;
 }
 
 /// The core class that interacts with Firebase Firestore and manages caching.
@@ -115,7 +122,12 @@ class FirebaseChatCore {
   Future<bool> createMe(String id, String name, String email) async {
     try {
       await createUserInFirestore(
-        types.User(id: id, firstName: name, imageUrl: '', lastName: '', role: types.Role.user, metadata: {'email': email}),
+        types.User(id: id,
+            firstName: name,
+            imageUrl: '',
+            lastName: '',
+            role: types.Role.user,
+            metadata: {'email': email}),
       );
       return true;
     } catch (_) {
@@ -215,6 +227,7 @@ class FirebaseChatCore {
     required String name,
     String? imageUrl,
     List<types.User> users = const [],
+    RoomCategory category = .group,
     Map<String, dynamic>? metadata,
   }) async {
     final userIds = {currentUserId, ...users.map((u) => u.id)}.toList();
@@ -241,11 +254,16 @@ class FirebaseChatCore {
     final initialMetadata = <String, dynamic>{
       ...?metadata,
       'adminId': currentUserId,
+      'category': category.toShortString(),
       'userRoles': userRoles,
       'userPermissions': userPermissions,
     };
 
-    final docRef = await _firestore.collection(_config.roomsCollection).add({
+    final collectionName = (category == RoomCategory.groupSession)
+        ? _config.groupSessionRoomsCollection
+        : _config.roomsCollection;
+
+    final docRef = await _firestore.collection(collectionName).add({
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
       'type': types.RoomType.group.toShortString(),
@@ -385,13 +403,12 @@ class FirebaseChatCore {
   }
 
   /// Updates user group permissions (canSendMessages, canSendMedia, isBanned).
-  Future<void> updateUserGroupPermissions(
-    String roomId,
-    String userId, {
-    bool? canSendMessages,
-    bool? canSendMedia,
-    bool? isBanned,
-  }) async {
+  Future<void> updateUserGroupPermissions(String roomId,
+      String userId, {
+        bool? canSendMessages,
+        bool? canSendMedia,
+        bool? isBanned,
+      }) async {
     final docRef = _firestore.collection(_config.roomsCollection).doc(roomId);
     final docSnap = await docRef.get();
     if (!docSnap.exists) return;
@@ -451,9 +468,9 @@ class FirebaseChatCore {
 
   // --- Messages Operations ---
 
-  String _getCollectionForRoom(String roomId) {
-    if (roomId.startsWith('group_bundle_')) {
-      return groupSessionCollection;
+  String _getCollectionForRoom(String roomId, {RoomCategory? category}) {
+    if (category == RoomCategory.groupSession || roomId.startsWith('group_bundle_')) {
+      return _config.groupSessionRoomsCollection;
     }
     return _config.roomsCollection;
   }
@@ -604,7 +621,7 @@ class FirebaseChatCore {
     StreamSubscription? subscription;
     try {
       subscription = roomsQuery(Timestamp.fromMillisecondsSinceEpoch(0)).snapshots().listen(
-        (snapshot) async {
+            (snapshot) async {
           try {
             final rooms = await _processRoomsQuery(snapshot);
             if (rooms.isNotEmpty) {
@@ -665,22 +682,20 @@ class FirebaseChatCore {
     }
   }
 
-  // --- Group Session Rooms (Collection: group_session_rooms) ---
+  // --- Group Session Rooms (Collection: Configurable via ChatConfig) ---
 
-  static const String groupSessionCollection = 'group_session_rooms';
-
-  /// Emits a stream of group session rooms for current user from collection 'group_session_rooms'.
+  /// Emits a stream of group session rooms for current user from configured group session collection.
   Stream<List<types.Room>> getGroupSessionRoomsStream() {
     final controller = StreamController<List<types.Room>>.broadcast();
 
     StreamSubscription? subscription;
     try {
       subscription = _firestore
-          .collection(groupSessionCollection)
+          .collection(_config.groupSessionRoomsCollection)
           .where('userIds', arrayContains: currentUserId)
           .snapshots()
           .listen(
-        (snapshot) async {
+            (snapshot) async {
           try {
             final rooms = await _processRoomsQuery(snapshot);
             if (!controller.isClosed) {
@@ -708,11 +723,11 @@ class FirebaseChatCore {
     return controller.stream;
   }
 
-  /// Direct one-time fetch of group session rooms for current user from collection 'group_session_rooms'.
+  /// Direct one-time fetch of group session rooms for current user.
   Future<List<types.Room>> getGroupSessionRooms() async {
     try {
       final querySnapshot = await _firestore
-          .collection(groupSessionCollection)
+          .collection(_config.groupSessionRoomsCollection)
           .where('userIds', arrayContains: currentUserId)
           .get();
 
@@ -726,7 +741,7 @@ class FirebaseChatCore {
 
   /// Mute/Unmute a member in a Group Session Room (Admin action).
   Future<void> muteMemberInGroupSession(String roomId, String userId, bool isMuted) async {
-    final docRef = _firestore.collection(groupSessionCollection).doc(roomId);
+    final docRef = _firestore.collection(_config.groupSessionRoomsCollection).doc(roomId);
     final docSnap = await docRef.get();
     if (!docSnap.exists) return;
 
@@ -750,7 +765,7 @@ class FirebaseChatCore {
 
   /// Remove/Kick a member from a Group Session Room (Admin action).
   Future<void> removeMemberFromGroupSession(String roomId, String userId) async {
-    final docRef = _firestore.collection(groupSessionCollection).doc(roomId);
+    final docRef = _firestore.collection(_config.groupSessionRoomsCollection).doc(roomId);
     final docSnap = await docRef.get();
     if (!docSnap.exists) return;
 
@@ -792,7 +807,7 @@ class FirebaseChatCore {
     StreamSubscription? subscription;
     try {
       subscription = messagesQuery(Timestamp.fromMillisecondsSinceEpoch(0), roomId).snapshots().listen(
-        (snapshot) async {
+            (snapshot) async {
           final messagesList = <Map<String, dynamic>>[];
           for (final doc in snapshot.docs) {
             final data = doc.data();
@@ -898,7 +913,9 @@ class FirebaseChatCore {
     metadata['latestSeen$currentUserId'] = metadata['latestSeen'];
 
     // Set online status metadata
-    if (otherUserId != null && otherUserId.trim().isNotEmpty) {
+    if (otherUserId != null && otherUserId
+        .trim()
+        .isNotEmpty) {
       final isOnlineVal = data['isOnline$otherUserId'];
       if (isOnlineVal != null) {
         if (isOnlineVal is bool) {

@@ -10,11 +10,11 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  cloud_firestore: ^6.6.0
-  hive_ce: ^2.19.3
-  hive_ce_flutter: ^2.3.4
-  flutter_chat_types: ^3.6.2
-  collection: ^1.19.1
+  cloud_firestore:
+  hive_ce:
+  hive_ce_flutter:
+  flutter_chat_types:
+  collection:
 
 dev_dependencies:
   flutter_test:
