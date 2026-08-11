@@ -15,7 +15,7 @@ class ChatConfig {
   /// Name of the rooms collection in Firestore (default: 'rooms').
   final String roomsCollectionName;
 
-  /// Name of the group session rooms collection in Firestore (default: 'group_session_rooms').
+  /// Name of the group session rooms collection in Firestore (default: 'group_rooms').
   final String groupSessionRoomsCollectionName;
 
   /// Name of the users collection in Firestore (default: 'users').
@@ -34,7 +34,7 @@ class ChatConfig {
     required this.firestore,
     required this.currentUserId,
     this.roomsCollectionName = 'rooms',
-    this.groupSessionRoomsCollectionName = 'group_session_rooms',
+    this.groupSessionRoomsCollectionName = 'group_rooms',
     this.usersCollectionName = 'users',
     this.isTestMode = false,
     this.uploadDelegate,

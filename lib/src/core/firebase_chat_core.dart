@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:collection/collection.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
 import '../../chat_lib.dart';
 import '../config/chat_config.dart';
@@ -84,6 +85,30 @@ class FirebaseChatCore {
 
     await _firestore.collection(_config.usersCollection).doc(user.id).set(data);
     await ChatCacheManager.instance.cacheUser(user);
+  }
+
+  /// Creates multiple Users in Firestore using a batch write.
+  Future<void> createUsersInFirestore(List<types.User> users) async {
+    final batch = _firestore.batch();
+    for (final user in users) {
+      if (user.id == '0') continue;
+      final data = {
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'fitness_id': user.id,
+        'firstName': user.firstName,
+        'imageUrl': user.imageUrl,
+        'lastName': user.lastName,
+        'lastSeen': FieldValue.serverTimestamp(),
+        'role': user.role?.toShortString() ?? types.Role.user.toShortString(),
+        'userAppId': currentUserId,
+        'metadata': user.metadata,
+      };
+      final docRef = _firestore.collection(_config.usersCollection).doc(user.id);
+      batch.set(docRef, data, SetOptions(merge: true));
+      await ChatCacheManager.instance.cacheUser(user);
+    }
+    await batch.commit();
   }
 
   /// Updates a user profile in Firestore.
@@ -225,54 +250,53 @@ class FirebaseChatCore {
   /// Creates a group chatroom with a name, optional image, users, and sets creator as admin.
   Future<types.Room> createGroupRoom({
     required String name,
+    String? id,
     String? imageUrl,
     List<types.User> users = const [],
-    RoomCategory category = .group,
+    RoomCategory category = RoomCategory.group,
     Map<String, dynamic>? metadata,
   }) async {
     final userIds = {currentUserId, ...users.map((u) => u.id)}.toList();
-    final userRoles = <String, String>{
-      currentUserId: types.Role.admin.toShortString(),
-    };
-    final userPermissions = <String, Map<String, dynamic>>{
-      currentUserId: {
-        'canSendMessages': true,
-        'canSendMedia': true,
-        'isBanned': false,
-      },
-    };
-
-    for (final u in users) {
-      userRoles[u.id] = types.Role.user.toShortString();
-      userPermissions[u.id] = {
-        'canSendMessages': true,
-        'canSendMedia': true,
-        'isBanned': false,
-      };
-    }
 
     final initialMetadata = <String, dynamic>{
       ...?metadata,
       'adminId': currentUserId,
       'category': category.toShortString(),
-      'userRoles': userRoles,
-      'userPermissions': userPermissions,
     };
 
     final collectionName = (category == RoomCategory.groupSession)
         ? _config.groupSessionRoomsCollection
         : _config.roomsCollection;
 
-    final docRef = await _firestore.collection(collectionName).add({
+    final docRef = id != null
+        ? _firestore.collection(collectionName).doc(id)
+        : _firestore.collection(collectionName).doc();
+    final batch = _firestore.batch();
+
+    batch.set(docRef, {
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
       'type': types.RoomType.group.toShortString(),
       'userIds': userIds,
-      'userRoles': userRoles,
       'name': name,
       'imageUrl': imageUrl,
       'metadata': initialMetadata,
     });
+
+    for (final userId in userIds) {
+      final role = (userId == currentUserId) ? types.Role.admin : types.Role.user;
+      final memberRef = docRef.collection('members').doc(userId);
+      batch.set(memberRef, {
+        'userId': userId,
+        'role': role.toShortString(),
+        'canSendMessages': true,
+        'canSendMedia': true,
+        'isBanned': false,
+        'joinedAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    await batch.commit();
 
     final docSnap = await docRef.get();
     final room = await _processRoomDocument(docSnap);
@@ -282,99 +306,74 @@ class FirebaseChatCore {
 
   /// Adds users to an existing group room.
   Future<void> addUsersToGroup(String roomId, List<types.User> newUsers) async {
-    final docRef = _firestore.collection(_config.roomsCollection).doc(roomId);
-    final docSnap = await docRef.get();
-    if (!docSnap.exists) return;
+    final collectionName = _getCollectionForRoom(roomId);
+    final docRef = _firestore.collection(collectionName).doc(roomId);
 
-    final data = docSnap.data() ?? {};
-    final userIds = List<String>.from(data['userIds'] ?? []);
-    final userRoles = Map<String, dynamic>.from(data['userRoles'] ?? {});
-    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
-    final userPermissions = Map<String, dynamic>.from(metadata['userPermissions'] ?? {});
+    final batch = _firestore.batch();
+
+    batch.update(docRef, {
+      'userIds': FieldValue.arrayUnion(newUsers.map((u) => u.id).toList()),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
 
     for (final u in newUsers) {
-      if (!userIds.contains(u.id)) {
-        userIds.add(u.id);
-      }
-      userRoles[u.id] = types.Role.user.toShortString();
-      userPermissions[u.id] = {
+      final memberRef = docRef.collection('members').doc(u.id);
+      batch.set(memberRef, {
+        'userId': u.id,
+        'role': types.Role.user.toShortString(),
         'canSendMessages': true,
         'canSendMedia': true,
         'isBanned': false,
-      };
+        'joinedAt': FieldValue.serverTimestamp(),
+      });
     }
 
-    metadata['userRoles'] = userRoles;
-    metadata['userPermissions'] = userPermissions;
-
-    await docRef.update({
-      'userIds': userIds,
-      'userRoles': userRoles,
-      'metadata': metadata,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    await batch.commit();
   }
 
   /// Removes a user from a group room.
   Future<void> removeUserFromGroup(String roomId, String userId) async {
-    final docRef = _firestore.collection(_config.roomsCollection).doc(roomId);
-    final docSnap = await docRef.get();
-    if (!docSnap.exists) return;
+    final collectionName = _getCollectionForRoom(roomId);
+    final docRef = _firestore.collection(collectionName).doc(roomId);
 
-    final data = docSnap.data() ?? {};
-    final userIds = List<String>.from(data['userIds'] ?? []);
-    final userRoles = Map<String, dynamic>.from(data['userRoles'] ?? {});
-    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
-    final userPermissions = Map<String, dynamic>.from(metadata['userPermissions'] ?? {});
+    final batch = _firestore.batch();
 
-    userIds.remove(userId);
-    userRoles.remove(userId);
-    userPermissions.remove(userId);
-
-    metadata['userRoles'] = userRoles;
-    metadata['userPermissions'] = userPermissions;
-
-    await docRef.update({
-      'userIds': userIds,
-      'userRoles': userRoles,
-      'metadata': metadata,
+    batch.update(docRef, {
+      'userIds': FieldValue.arrayRemove([userId]),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+
+    final memberRef = docRef.collection('members').doc(userId);
+    batch.delete(memberRef);
+
+    await batch.commit();
   }
 
   /// Adds users by their String IDs to an existing group room.
   Future<void> addUsersToGroupByIds(String roomId, List<String> newUserIds) async {
-    final docRef = _firestore.collection(_config.roomsCollection).doc(roomId);
-    final docSnap = await docRef.get();
-    if (!docSnap.exists) return;
+    final collectionName = _getCollectionForRoom(roomId);
+    final docRef = _firestore.collection(collectionName).doc(roomId);
 
-    final data = docSnap.data() ?? {};
-    final userIds = List<String>.from(data['userIds'] ?? []);
-    final userRoles = Map<String, dynamic>.from(data['userRoles'] ?? {});
-    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
-    final userPermissions = Map<String, dynamic>.from(metadata['userPermissions'] ?? {});
+    final batch = _firestore.batch();
+
+    batch.update(docRef, {
+      'userIds': FieldValue.arrayUnion(newUserIds),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
 
     for (final id in newUserIds) {
-      if (!userIds.contains(id)) {
-        userIds.add(id);
-      }
-      userRoles[id] = types.Role.user.toShortString();
-      userPermissions[id] = {
+      final memberRef = docRef.collection('members').doc(id);
+      batch.set(memberRef, {
+        'userId': id,
+        'role': types.Role.user.toShortString(),
         'canSendMessages': true,
         'canSendMedia': true,
         'isBanned': false,
-      };
+        'joinedAt': FieldValue.serverTimestamp(),
+      });
     }
 
-    metadata['userRoles'] = userRoles;
-    metadata['userPermissions'] = userPermissions;
-
-    await docRef.update({
-      'userIds': userIds,
-      'userRoles': userRoles,
-      'metadata': metadata,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    await batch.commit();
   }
 
   /// Leaves a group room for the current user.
@@ -384,22 +383,21 @@ class FirebaseChatCore {
 
   /// Updates user role in a group room (e.g. promote to admin or demote to user).
   Future<void> updateUserGroupRole(String roomId, String userId, types.Role role) async {
-    final docRef = _firestore.collection(_config.roomsCollection).doc(roomId);
-    final docSnap = await docRef.get();
-    if (!docSnap.exists) return;
+    final collectionName = _getCollectionForRoom(roomId);
+    final docRef = _firestore.collection(collectionName).doc(roomId);
+    final memberRef = docRef.collection('members').doc(userId);
 
-    final data = docSnap.data() ?? {};
-    final userRoles = Map<String, dynamic>.from(data['userRoles'] ?? {});
-    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
+    final batch = _firestore.batch();
 
-    userRoles[userId] = role.toShortString();
-    metadata['userRoles'] = userRoles;
+    batch.update(memberRef, {
+      'role': role.toShortString(),
+    });
 
-    await docRef.update({
-      'userRoles': userRoles,
-      'metadata': metadata,
+    batch.update(docRef, {
       'updatedAt': FieldValue.serverTimestamp(),
     });
+
+    await batch.commit();
   }
 
   /// Updates user group permissions (canSendMessages, canSendMedia, isBanned).
@@ -409,30 +407,23 @@ class FirebaseChatCore {
         bool? canSendMedia,
         bool? isBanned,
       }) async {
-    final docRef = _firestore.collection(_config.roomsCollection).doc(roomId);
-    final docSnap = await docRef.get();
-    if (!docSnap.exists) return;
+    final collectionName = _getCollectionForRoom(roomId);
+    final docRef = _firestore.collection(collectionName).doc(roomId);
+    final memberRef = docRef.collection('members').doc(userId);
 
-    final data = docSnap.data() ?? {};
-    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
-    final userPermissions = Map<String, dynamic>.from(metadata['userPermissions'] ?? {});
-    final currentPerms = Map<String, dynamic>.from(userPermissions[userId] ?? {
-      'canSendMessages': true,
-      'canSendMedia': true,
-      'isBanned': false,
-    });
+    final updates = <String, dynamic>{};
+    if (canSendMessages != null) updates['canSendMessages'] = canSendMessages;
+    if (canSendMedia != null) updates['canSendMedia'] = canSendMedia;
+    if (isBanned != null) updates['isBanned'] = isBanned;
 
-    if (canSendMessages != null) currentPerms['canSendMessages'] = canSendMessages;
-    if (canSendMedia != null) currentPerms['canSendMedia'] = canSendMedia;
-    if (isBanned != null) currentPerms['isBanned'] = isBanned;
-
-    userPermissions[userId] = currentPerms;
-    metadata['userPermissions'] = userPermissions;
-
-    await docRef.update({
-      'metadata': metadata,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    if (updates.isNotEmpty) {
+      final batch = _firestore.batch();
+      batch.update(memberRef, updates);
+      batch.update(docRef, {
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      await batch.commit();
+    }
   }
 
   /// Bans a user from a group room (sets isBanned = true).
@@ -469,7 +460,9 @@ class FirebaseChatCore {
   // --- Messages Operations ---
 
   String _getCollectionForRoom(String roomId, {RoomCategory? category}) {
-    if (category == RoomCategory.groupSession || roomId.startsWith('group_bundle_')) {
+    if (category == RoomCategory.groupSession ||
+        roomId.startsWith('group_bundle_') ||
+        RegExp(r'^\d+$').hasMatch(roomId)) {
       return _config.groupSessionRoomsCollection;
     }
     return _config.roomsCollection;
@@ -726,6 +719,7 @@ class FirebaseChatCore {
   /// Direct one-time fetch of group session rooms for current user.
   Future<List<types.Room>> getGroupSessionRooms() async {
     try {
+      debugPrint('userIds arrayContains : $currentUserId ');
       final querySnapshot = await _firestore
           .collection(_config.groupSessionRoomsCollection)
           .where('userIds', arrayContains: currentUserId)
@@ -741,53 +735,12 @@ class FirebaseChatCore {
 
   /// Mute/Unmute a member in a Group Session Room (Admin action).
   Future<void> muteMemberInGroupSession(String roomId, String userId, bool isMuted) async {
-    final docRef = _firestore.collection(_config.groupSessionRoomsCollection).doc(roomId);
-    final docSnap = await docRef.get();
-    if (!docSnap.exists) return;
-
-    final data = docSnap.data() ?? {};
-    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
-    final userPermissions = Map<String, dynamic>.from(metadata['userPermissions'] ?? {});
-
-    userPermissions[userId] = {
-      'canSendMessages': !isMuted,
-      'canSendMedia': !isMuted,
-      'isBanned': isMuted,
-    };
-
-    metadata['userPermissions'] = userPermissions;
-
-    await docRef.update({
-      'metadata': metadata,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    await updateUserGroupPermissions(roomId, userId, isBanned: isMuted, canSendMessages: !isMuted, canSendMedia: !isMuted);
   }
 
   /// Remove/Kick a member from a Group Session Room (Admin action).
   Future<void> removeMemberFromGroupSession(String roomId, String userId) async {
-    final docRef = _firestore.collection(_config.groupSessionRoomsCollection).doc(roomId);
-    final docSnap = await docRef.get();
-    if (!docSnap.exists) return;
-
-    final data = docSnap.data() ?? {};
-    final userIds = List<String>.from(data['userIds'] ?? []);
-    final userRoles = Map<String, dynamic>.from(data['userRoles'] ?? {});
-    final metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
-    final userPermissions = Map<String, dynamic>.from(metadata['userPermissions'] ?? {});
-
-    userIds.remove(userId);
-    userRoles.remove(userId);
-    userPermissions.remove(userId);
-
-    metadata['userRoles'] = userRoles;
-    metadata['userPermissions'] = userPermissions;
-
-    await docRef.update({
-      'userIds': userIds,
-      'userRoles': userRoles,
-      'metadata': metadata,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    await removeUserFromGroup(roomId, userId);
   }
 
   /// Emits a stream of messages in a room, synchronized with Firestore and cached locally.
@@ -905,9 +858,44 @@ class FirebaseChatCore {
 
     // Set latest seen metadata
     final Map<String, dynamic> metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
-    if (data['userRoles'] != null && metadata['userRoles'] == null) {
-      metadata['userRoles'] = data['userRoles'];
+
+    // Fetch members sub-collection and populate userRoles and userPermissions
+    final collectionName = _getCollectionForRoom(doc.id);
+    final membersSnap = await _firestore.collection(collectionName).doc(doc.id).collection('members').get();
+
+    final userRoles = <String, String>{};
+    final userPermissions = <String, Map<String, dynamic>>{};
+
+    if (membersSnap.docs.isNotEmpty) {
+      for (final memberDoc in membersSnap.docs) {
+        final mData = memberDoc.data();
+        final mUserId = memberDoc.id;
+        final mRole = mData['role'] as String? ?? 'user';
+        userRoles[mUserId] = mRole;
+        userPermissions[mUserId] = {
+          'canSendMessages': mData['canSendMessages'] ?? true,
+          'canSendMedia': mData['canSendMedia'] ?? true,
+          'isBanned': mData['isBanned'] ?? false,
+        };
+      }
+    } else {
+      // Fallback to legacy fields if sub-collection is empty
+      if (data['userRoles'] != null) {
+        userRoles.addAll(Map<String, String>.from(data['userRoles'] as Map));
+      }
+      if (metadata['userPermissions'] != null) {
+        userPermissions.addAll(Map<String, Map<String, dynamic>>.from(
+          (metadata['userPermissions'] as Map).map(
+            (k, v) => MapEntry(k as String, Map<String, dynamic>.from(v as Map))
+          )
+        ));
+      }
     }
+
+    data['userRoles'] = userRoles;
+    metadata['userRoles'] = userRoles;
+    metadata['userPermissions'] = userPermissions;
+
     final latestSeenVal = data['latestSeen$currentUserId'];
     metadata['latestSeen'] = latestSeenVal is Timestamp ? latestSeenVal.millisecondsSinceEpoch : (latestSeenVal ?? 0);
     metadata['latestSeen$currentUserId'] = metadata['latestSeen'];
