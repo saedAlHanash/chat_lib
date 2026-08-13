@@ -80,7 +80,7 @@ class ChatCacheManager {
   }
 
   /// Retrieves all cached rooms for the current user (filters out deleted or removed rooms).
-  Future<List<types.Room>> getCachedRooms(String userId) async {
+  Future<List<types.Room>> getCachedRooms(String userId, types.RoomType roomType) async {
     final box = await _openRoomsBox(userId);
     final List<types.Room> rooms = [];
     for (final value in box.values) {
@@ -88,13 +88,19 @@ class ChatCacheManager {
         final castedMap = Map<String, dynamic>.from(value);
         final room = types.Room.fromJson(castedMap);
         if (!room.shouldHideForUser(userId)) {
-          rooms.add(room);
+          if (room.type == roomType) {
+            rooms.add(room);
+          }
         }
       } catch (e) {
         // Skip malformed entries
       }
     }
-    return rooms;
+
+    // Sort rooms by updatedAt descending (newest first)
+    return rooms..sort((a, b) {
+      return (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0);
+    });
   }
 
   // --- Messages Cache Operations ---
@@ -166,19 +172,19 @@ class ChatCacheManager {
 
   // --- Maintenance ---
 
-  /// Clears all local cache for a user (useful on logout).
-  Future<void> clearUserCache(String userId) async {
-    final roomsBox = await _openRoomsBox(userId);
-    await roomsBox.clear();
-
-    // Note: Since rooms are deleted, we'd also want to delete individual room message boxes.
-    // We can fetch room IDs and clear them.
-    final rooms = await getCachedRooms(userId);
-    for (final room in rooms) {
-      await clearRoomMessages(room.id, userId);
-    }
-
-    final usersBox = await _openUsersBox();
-    await usersBox.clear();
-  }
+  // /// Clears all local cache for a user (useful on logout).
+  // Future<void> clearUserCache(String userId) async {
+  //   final roomsBox = await _openRoomsBox(userId);
+  //   await roomsBox.clear();
+  //
+  //   // Note: Since rooms are deleted, we'd also want to delete individual room message boxes.
+  //   // We can fetch room IDs and clear them.
+  //   final rooms = await getCachedRooms(userId, null);
+  //   for (final room in rooms) {
+  //     await clearRoomMessages(room.id, userId);
+  //   }
+  //
+  //   final usersBox = await _openUsersBox();
+  //   await usersBox.clear();
+  // }
 }
