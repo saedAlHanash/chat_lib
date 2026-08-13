@@ -17,8 +17,9 @@ class ChatCacheManager {
     _isInitialized = true;
   }
 
-  /// Helper to get rooms box name for the current user.
-  String _roomsBoxName(String userId) => 'chat_rooms_box_$userId';
+  /// Helper to get rooms box name for direct or group rooms.
+  String _roomsBoxName(String userId, {bool isGroup = false}) =>
+      isGroup ? 'chat_group_rooms_box_$userId' : 'chat_direct_rooms_box_$userId';
 
   /// Helper to get messages box name for a specific room and user.
   String _messagesBoxName(String roomId, String userId) => 'chat_messages_box_${roomId}_$userId';
@@ -26,10 +27,10 @@ class ChatCacheManager {
   /// Helper to get users box name.
   String get _usersBoxName => 'chat_users_box';
 
-  /// Opens the rooms box for the given [userId].
-  Future<Box<Map>> _openRoomsBox(String userId) async {
+  /// Opens the rooms box for the given [userId] and room category.
+  Future<Box<Map>> _openRoomsBox(String userId, {bool isGroup = false}) async {
     await init();
-    return Hive.openBox<Map>(_roomsBoxName(userId));
+    return Hive.openBox<Map>(_roomsBoxName(userId, isGroup: isGroup));
   }
 
   /// Opens the messages box for the given [roomId] and [userId].
@@ -47,8 +48,8 @@ class ChatCacheManager {
   // --- Rooms Cache Operations ---
 
   /// Caches a list of rooms for the current user.
-  Future<void> saveRooms(String userId, List<types.Room> rooms) async {
-    final box = await _openRoomsBox(userId);
+  Future<void> saveRooms(String userId, List<types.Room> rooms, {bool isGroup = false}) async {
+    final box = await _openRoomsBox(userId, isGroup: isGroup);
     final map = <String, Map>{};
     for (final room in rooms) {
       if (room.shouldHideForUser(userId)) {
@@ -64,7 +65,8 @@ class ChatCacheManager {
 
   /// Updates or inserts a single room in the cache.
   Future<void> saveRoom(String userId, types.Room room) async {
-    final box = await _openRoomsBox(userId);
+    final isGroup = room.type == types.RoomType.group;
+    final box = await _openRoomsBox(userId, isGroup: isGroup);
     if (room.shouldHideForUser(userId)) {
       await box.delete(room.id);
     } else {
@@ -73,22 +75,44 @@ class ChatCacheManager {
   }
 
   /// Removes a room from local cache.
-  Future<void> deleteRoomFromCache(String userId, String roomId) async {
-    final box = await _openRoomsBox(userId);
+  Future<void> deleteRoomFromCache(String userId, String roomId, {bool isGroup = false}) async {
+    final box = await _openRoomsBox(userId, isGroup: isGroup);
     await box.delete(roomId);
     await clearRoomMessages(roomId, userId);
   }
 
-  /// Retrieves all cached rooms for the current user (filters out deleted or removed rooms).
-  Future<List<types.Room>> getCachedRooms(String userId, types.RoomType roomType) async {
-    final box = await _openRoomsBox(userId);
+  /// Helper to recursively cast Hive dynamic maps to Map<String, dynamic>
+  Map<String, dynamic> _deepCastMap(Map map) {
+    return map.map((key, value) {
+      final stringKey = key.toString();
+      if (value is Map) {
+        return MapEntry(stringKey, _deepCastMap(value));
+      } else if (value is List) {
+        return MapEntry(
+          stringKey,
+          value.map((item) {
+            if (item is Map) {
+              return _deepCastMap(item);
+            }
+            return item;
+          }).toList(),
+        );
+      } else {
+        return MapEntry(stringKey, value);
+      }
+    });
+  }
+
+  /// Retrieves cached direct (1-to-1) rooms for the current user.
+  Future<List<types.Room>> getCachedRooms(String userId) async {
+    final box = await _openRoomsBox(userId, isGroup: false);
     final List<types.Room> rooms = [];
     for (final value in box.values) {
       try {
-        final castedMap = Map<String, dynamic>.from(value);
-        final room = types.Room.fromJson(castedMap);
-        if (!room.shouldHideForUser(userId)) {
-          if (room.type == roomType) {
+        if (value is Map) {
+          final castedMap = _deepCastMap(value);
+          final room = types.Room.fromJson(castedMap);
+          if (!room.shouldHideForUser(userId)) {
             rooms.add(room);
           }
         }
@@ -97,10 +121,34 @@ class ChatCacheManager {
       }
     }
 
-    // Sort rooms by updatedAt descending (newest first)
-    return rooms..sort((a, b) {
-      return (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0);
-    });
+    return rooms
+      ..sort((a, b) {
+        return (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0);
+      });
+  }
+
+  /// Retrieves cached group session rooms for the current user.
+  Future<List<types.Room>> getCachedGroupRooms(String userId) async {
+    final box = await _openRoomsBox(userId, isGroup: true);
+    final List<types.Room> rooms = [];
+    for (final value in box.values) {
+      try {
+        if (value is Map) {
+          final castedMap = _deepCastMap(value);
+          final room = types.Room.fromJson(castedMap);
+          if (!room.shouldHideForUser(userId)) {
+            rooms.add(room);
+          }
+        }
+      } catch (e) {
+        print('❌ [getCachedGroupRooms Error]: $e');
+      }
+    }
+
+    return rooms
+      ..sort((a, b) {
+        return (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0);
+      });
   }
 
   // --- Messages Cache Operations ---
@@ -134,8 +182,10 @@ class ChatCacheManager {
     final List<types.Message> messages = [];
     for (final value in box.values) {
       try {
-        final castedMap = Map<String, dynamic>.from(value);
-        messages.add(types.Message.fromJson(castedMap));
+        if (value is Map) {
+          final castedMap = _deepCastMap(value);
+          messages.add(types.Message.fromJson(castedMap));
+        }
       } catch (e) {
         // Skip malformed entries
       }
@@ -161,30 +211,30 @@ class ChatCacheManager {
   Future<types.User?> getCachedUser(String userId) async {
     final box = await _openUsersBox();
     final value = box.get(userId);
-    if (value == null) return null;
+    if (value == null || value is! Map) return null;
     try {
-      final castedMap = Map<String, dynamic>.from(value);
+      final castedMap = _deepCastMap(value);
       return types.User.fromJson(castedMap);
     } catch (e) {
       return null;
     }
   }
 
-  // --- Maintenance ---
+// --- Maintenance ---
 
-  // /// Clears all local cache for a user (useful on logout).
-  // Future<void> clearUserCache(String userId) async {
-  //   final roomsBox = await _openRoomsBox(userId);
-  //   await roomsBox.clear();
-  //
-  //   // Note: Since rooms are deleted, we'd also want to delete individual room message boxes.
-  //   // We can fetch room IDs and clear them.
-  //   final rooms = await getCachedRooms(userId, null);
-  //   for (final room in rooms) {
-  //     await clearRoomMessages(room.id, userId);
-  //   }
-  //
-  //   final usersBox = await _openUsersBox();
-  //   await usersBox.clear();
-  // }
+// /// Clears all local cache for a user (useful on logout).
+// Future<void> clearUserCache(String userId) async {
+//   final roomsBox = await _openRoomsBox(userId);
+//   await roomsBox.clear();
+//
+//   // Note: Since rooms are deleted, we'd also want to delete individual room message boxes.
+//   // We can fetch room IDs and clear them.
+//   final rooms = await getCachedRooms(userId, null);
+//   for (final room in rooms) {
+//     await clearRoomMessages(room.id, userId);
+//   }
+//
+//   final usersBox = await _openUsersBox();
+//   await usersBox.clear();
+// }
 }
