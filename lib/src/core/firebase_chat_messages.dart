@@ -21,6 +21,59 @@ extension FirebaseChatMessages on FirebaseChatCore {
     });
   }
 
+  /// Updates / edits a text message.
+  Future<void> updateMessage(types.Message message, String roomId) async {
+    if (message is! types.TextMessage) {
+      throw StateError('يسمح بتعديل الرسائل النصية فقط.');
+    }
+    final collection = _getCollectionForRoom(roomId);
+    final msgDocRef = _firestore.collection('$collection/$roomId/messages').doc(message.id);
+    final msgSnap = await msgDocRef.get();
+    if (!msgSnap.exists) {
+      throw StateError('الرسالة غير موجودة.');
+    }
+
+    final msgData = msgSnap.data() ?? {};
+    final authorId = msgData['authorId']?.toString();
+    if (authorId != currentUserId) {
+      throw StateError('يمكنك تعديل رسائلك فقط.');
+    }
+
+    // Check permissions
+    final memberDoc = await _firestore.collection('$collection/$roomId/members').doc(currentUserId).get();
+    bool isAdmin = false;
+    if (memberDoc.exists) {
+      final perms = memberDoc.data() ?? {};
+      if (perms['role'] == 'admin') {
+        isAdmin = true;
+      }
+      if (perms['isBanned'] == true || perms['canSendMessages'] == false) {
+        throw StateError('غير مسموح لك بتعديل أو إرسال الرسائل في هذه المجموعة.');
+      }
+    }
+
+    // 5-minute limit check for non-admin students
+    if (!isAdmin) {
+      final createdAtTimestamp = msgData['createdAt'] as Timestamp?;
+      final createdAtMillis = createdAtTimestamp?.millisecondsSinceEpoch ??
+          (msgData['createdAt'] is num ? (msgData['createdAt'] as num).toInt() : 0);
+      final nowMillis = DateTime.now().millisecondsSinceEpoch;
+
+      if (createdAtMillis > 0 && (nowMillis - createdAtMillis) > 5 * 60 * 1000) {
+        throw StateError('لا يمكن تعديل الرسالة بعد مرور أكثر من 5 دقائق.');
+      }
+    }
+
+    final metadata = Map<String, dynamic>.from(msgData['metadata'] as Map? ?? {});
+    metadata['isEdited'] = true;
+
+    await msgDocRef.update({
+      'text': message.text,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'metadata': metadata,
+    });
+  }
+
   /// Sends a message, supports delegate file upload if needed.
   Future<void> sendMessage(dynamic partialMessage, String roomId, {String? senderId}) async {
     final finalSenderId = senderId ?? currentUserId;
@@ -38,8 +91,8 @@ extension FirebaseChatMessages on FirebaseChatCore {
       }
       final isMedia =
           partialMessage is types.PartialFile ||
-              partialMessage is types.PartialImage ||
-              partialMessage is types.PartialAudio;
+          partialMessage is types.PartialImage ||
+          partialMessage is types.PartialAudio;
       if (isMedia && perms['canSendMedia'] == false) {
         throw StateError('User is restricted from sending media in this group.');
       }
@@ -61,8 +114,8 @@ extension FirebaseChatMessages on FirebaseChatCore {
             }
             final isMedia =
                 partialMessage is types.PartialFile ||
-                    partialMessage is types.PartialImage ||
-                    partialMessage is types.PartialAudio;
+                partialMessage is types.PartialImage ||
+                partialMessage is types.PartialAudio;
             if (isMedia && perms['canSendMedia'] == false) {
               throw StateError('User is restricted from sending media in this group.');
             }
@@ -153,38 +206,31 @@ extension FirebaseChatMessages on FirebaseChatCore {
   /// Emits a stream of messages in a room, synchronized with Firestore and cached locally.
   Stream<List<types.Message>> getMessagesStream({required String roomId, Timestamp? updateTime}) {
     final controller = StreamController<List<types.Message>>.broadcast();
+    _initMessagesStream(controller, roomId, updateTime);
+    return controller.stream;
+  }
 
+  Future<void> _initMessagesStream(
+    StreamController<List<types.Message>> controller,
+    String roomId,
+    Timestamp? updateTime,
+  ) async {
     // 1. Emit cached messages immediately
-    ChatCacheManager.instance.getCachedMessages(roomId, currentUserId).then((cached) {
-      if (!controller.isClosed && cached.isNotEmpty) {
-        // Sort newest first
-        cached.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
-        controller.add(cached);
-      }
-    });
+    final cached = await ChatCacheManager.instance.getCachedMessages(roomId, currentUserId);
+    if (!controller.isClosed && cached.isNotEmpty) {
+      // Sort newest first
+      cached.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
+      controller.add(cached);
+    }
+
+    final resolvedUpdateTime = updateTime ?? Timestamp.fromMillisecondsSinceEpoch(cached.firstOrNull?.updatedAt ?? 0);
 
     // 2. Query Firestore and update cache + emit
     StreamSubscription? subscription;
     try {
-      subscription = messagesQuery(updateTime, roomId).snapshots().listen(
+      subscription = messagesQuery(resolvedUpdateTime, roomId).snapshots().listen(
         (snapshot) async {
-          final messagesList = <Map<String, dynamic>>[];
-          for (final doc in snapshot.docs) {
-            final data = doc.data();
-            final authorId = data['authorId'] as String?;
-            if (authorId != null) {
-              final author = await fetchUser(authorId);
-              data['author'] = author.toJson();
-              data['createdAt'] = data['createdAt'] is Timestamp
-                  ? (data['createdAt'] as Timestamp).millisecondsSinceEpoch
-                  : (data['createdAt'] ?? 0);
-              data['id'] = doc.id;
-              data['updatedAt'] = data['updatedAt'] is Timestamp
-                  ? (data['updatedAt'] as Timestamp).millisecondsSinceEpoch
-                  : (data['updatedAt'] ?? 0);
-              messagesList.add(data);
-            }
-          }
+          final messagesList = await _processMessagesQuery(snapshot);
 
           if (messagesList.isNotEmpty) {
             await ChatCacheManager.instance.saveMessages(roomId, currentUserId, messagesList);
@@ -201,13 +247,11 @@ extension FirebaseChatMessages on FirebaseChatCore {
         },
       );
     } catch (e) {
-      controller.addError(e);
+      if (!controller.isClosed) controller.addError(e);
     }
 
     controller.onCancel = () {
       subscription?.cancel();
     };
-
-    return controller.stream;
   }
 }

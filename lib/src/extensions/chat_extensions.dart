@@ -6,6 +6,11 @@ extension RoomLibExtension on types.Room {
   /// Resolves the current user ID from the core service.
   String get currentUserId => FirebaseChatCore.instance.currentUserId;
 
+  /// Resolves the current user object in the room.
+  types.User get me {
+    return users.firstWhere((u) => u.id == currentUserId, orElse: () => types.User(id: currentUserId));
+  }
+
   /// Resolves the other user participating in this direct room.
   types.User get otherUser {
     return users.firstWhere(
@@ -13,6 +18,9 @@ extension RoomLibExtension on types.Room {
       orElse: () => const types.User(id: '-1', firstName: 'Unknown User'),
     );
   }
+
+  /// A concatenation of all users' names in the room.
+  String get usersName => users.map((e) => '${e.firstName ?? ''} ${e.lastName ?? ''}'.trim()).join(' ');
 
   /// Timestamp of when the current user last viewed the room.
   int get latestSeen => metadata?['latestSeen'] ?? 0;
@@ -36,7 +44,7 @@ extension RoomLibExtension on types.Room {
   bool get isSupport => users.any((e) => e.id == '0');
 
   /// Checks if room is a group room.
-  bool get isGroup => type == types.RoomType.group;
+  bool get isGroup => type == .group;
 
   /// Checks if a user (defaults to current user) is an admin in this room.
   bool isAdmin([String? targetUserId]) {

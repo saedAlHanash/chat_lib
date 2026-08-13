@@ -171,4 +171,28 @@ extension FirebaseChatHelpers on FirebaseChatCore {
   Future<void> addSentWelcomeMessagesId(List<int> ids) async {
     await _firestore.collection('${_config.isTestMode ? 'test_' : ''}sentMessagesIds').doc(currentUserId).set({'ids': ids});
   }
+
+  /// Helper to process a QuerySnapshot into a list of messages.
+  Future<List<Map<String, dynamic>>> _processMessagesQuery(QuerySnapshot<Map<String, dynamic>> snapshot) async {
+    final futures = snapshot.docs.map((doc) => _processMessageDocument(doc));
+    return await Future.wait(futures);
+  }
+
+  /// Helper to process a single message document snapshot.
+  Future<Map<String, dynamic>> _processMessageDocument(DocumentSnapshot<Map<String, dynamic>> doc) async {
+    final data = doc.data() ?? {};
+    final authorId = data['authorId'] as String?;
+    if (authorId != null) {
+      final author = await fetchUser(authorId);
+      data['author'] = author.toJson();
+    }
+    data['createdAt'] = data['createdAt'] is Timestamp
+        ? (data['createdAt'] as Timestamp).millisecondsSinceEpoch
+        : (data['createdAt'] ?? 0);
+    data['id'] = doc.id;
+    data['updatedAt'] = data['updatedAt'] is Timestamp
+        ? (data['updatedAt'] as Timestamp).millisecondsSinceEpoch
+        : (data['updatedAt'] ?? 0);
+    return data;
+  }
 }

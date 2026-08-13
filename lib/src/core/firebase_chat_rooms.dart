@@ -52,23 +52,34 @@ extension FirebaseChatRooms on FirebaseChatCore {
 
   /// Updates the latest seen timestamp for the current user in a room.
   Future<void> latestSeenRoom(types.Room room) async {
-    await _firestore.collection(_config.roomsCollection).doc(room.id).update({
-      'latestSeen$currentUserId': FieldValue.serverTimestamp(),
-      'isOnline$currentUserId': false,
-    });
+    final collection = _getCollectionForRoom(room.id);
+    try {
+      await _firestore.collection(collection).doc(room.id).update({
+        'latestSeen$currentUserId': FieldValue.serverTimestamp(),
+        'isOnline$currentUserId': false,
+      });
+    } catch (_) {}
 
     // Update local metadata
     final metadata = Map<String, dynamic>.from(room.metadata ?? {});
-    metadata['latestSeen'] = room.updatedAt;
-    metadata['latestSeen$currentUserId'] = room.updatedAt;
+    final nowMillis = DateTime.now().millisecondsSinceEpoch;
+    metadata['latestSeen'] = nowMillis;
+    metadata['latestSeen$currentUserId'] = nowMillis;
 
     final updatedRoom = room.copyWith(metadata: metadata);
+    final isGroup = room.type == types.RoomType.group || RegExp(r'^\d+$').hasMatch(room.id);
     await ChatCacheManager.instance.saveRoom(currentUserId, updatedRoom);
+    if (isGroup) {
+      await ChatCacheManager.instance.saveRooms(currentUserId, [updatedRoom], isGroup: true);
+    }
   }
 
   /// Sets the current user's online state in a room.
   Future<void> setMyState(types.Room room, bool isOnline) async {
-    await _firestore.collection(_config.roomsCollection).doc(room.id).update({'isOnline$currentUserId': isOnline});
+    final collection = _getCollectionForRoom(room.id);
+    try {
+      await _firestore.collection(collection).doc(room.id).update({'isOnline$currentUserId': isOnline});
+    } catch (_) {}
   }
 
   /// Emits a stream of rooms for the current user, synchronized with Firestore and cached locally.

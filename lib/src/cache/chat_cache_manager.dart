@@ -123,6 +123,9 @@ class ChatCacheManager {
 
     return rooms
       ..sort((a, b) {
+        if (a.isNotRead != b.isNotRead) {
+          return a.isNotRead ? -1 : 1;
+        }
         return (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0);
       });
   }
@@ -147,6 +150,9 @@ class ChatCacheManager {
 
     return rooms
       ..sort((a, b) {
+        if (a.isNotRead != b.isNotRead) {
+          return a.isNotRead ? -1 : 1;
+        }
         return (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0);
       });
   }
@@ -180,17 +186,43 @@ class ChatCacheManager {
   Future<List<types.Message>> getCachedMessages(String roomId, String userId) async {
     final box = await _openMessagesBox(roomId, userId);
     final List<types.Message> messages = [];
-    for (final value in box.values) {
+    final nowTimeMillis = DateTime.now().millisecondsSinceEpoch;
+    final expiredKeys = <String>[];
+
+    for (final key in box.keys) {
+      final value = box.get(key);
       try {
         if (value is Map) {
           final castedMap = _deepCastMap(value);
-          messages.add(types.Message.fromJson(castedMap));
+          final type = castedMap['type']?.toString();
+          final isDeleted = castedMap['metadata']?['isDeleted'] == true;
+          final createdAt = castedMap['createdAt'] is num ? (castedMap['createdAt'] as num).toInt() : 0;
+
+          // Delete files/videos older than a month, or soft deleted messages
+          final isOldAttachment = (type == 'file' || type == 'video') &&
+              (nowTimeMillis - createdAt).abs() > 2592000000;
+
+          if (isDeleted || isOldAttachment) {
+            expiredKeys.add(key.toString());
+          } else {
+            messages.add(types.Message.fromJson(castedMap));
+          }
         }
       } catch (e) {
         // Skip malformed entries
       }
     }
-    return messages;
+
+    if (expiredKeys.isNotEmpty) {
+      Future(() async {
+        for (final k in expiredKeys) {
+          await box.delete(k);
+        }
+      });
+    }
+
+    return messages
+      ..sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
   }
 
   /// Clear messages box for a room.
