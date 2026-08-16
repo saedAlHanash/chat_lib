@@ -103,6 +103,29 @@ class ChatCacheManager {
     });
   }
 
+  void _sanitizeRoomMap(Map<String, dynamic> roomMap) {
+    if (roomMap['users'] is List) {
+      for (final u in roomMap['users']) {
+        if (u is Map) {
+          final r = u['role']?.toString().toLowerCase();
+          if (r != 'admin' && r != 'agent' && r != 'moderator' && r != 'user') {
+            u['role'] = 'user';
+          }
+        }
+      }
+    }
+    if (roomMap['lastMessages'] is List) {
+      for (final m in roomMap['lastMessages']) {
+        if (m is Map && m['author'] is Map) {
+          final r = m['author']['role']?.toString().toLowerCase();
+          if (r != 'admin' && r != 'agent' && r != 'moderator' && r != 'user') {
+            m['author']['role'] = 'user';
+          }
+        }
+      }
+    }
+  }
+
   /// Retrieves cached direct (1-to-1) rooms for the current user.
   Future<List<types.Room>> getCachedRooms(String userId) async {
     final box = await _openRoomsBox(userId, isGroup: false);
@@ -111,13 +134,14 @@ class ChatCacheManager {
       try {
         if (value is Map) {
           final castedMap = _deepCastMap(value);
+          _sanitizeRoomMap(castedMap);
           final room = types.Room.fromJson(castedMap);
           if (!room.shouldHideForUser(userId)) {
             rooms.add(room);
           }
         }
       } catch (e) {
-        // Skip malformed entries
+        print('❌ [getCachedRooms Error]: $e');
       }
     }
 
@@ -138,6 +162,7 @@ class ChatCacheManager {
       try {
         if (value is Map) {
           final castedMap = _deepCastMap(value);
+          _sanitizeRoomMap(castedMap);
           final room = types.Room.fromJson(castedMap);
           if (!room.shouldHideForUser(userId)) {
             rooms.add(room);
@@ -239,17 +264,52 @@ class ChatCacheManager {
     await box.put(user.id, user.toJson());
   }
 
+  /// Caches a list of users.
+  Future<void> saveUsers(List<types.User> users) async {
+    final box = await _openUsersBox();
+    final map = <String, Map>{};
+    for (final user in users) {
+      if (user.firstName?.toLowerCase() == 'guest' || user.id == '0') continue;
+      map[user.id] = user.toJson();
+    }
+    if (map.isNotEmpty) {
+      await box.putAll(map);
+    }
+  }
+
+  /// Retrieves all cached users.
+  Future<List<types.User>> getCachedUsers() async {
+    final box = await _openUsersBox();
+    final users = <types.User>[];
+    for (final value in box.values) {
+      try {
+        final casted = _deepCastMap(value);
+        if (casted['firstName']?.toString().toLowerCase() == 'guest') {
+          continue;
+        }
+        users.add(types.User.fromJson(casted));
+      } catch (_) {}
+    }
+    return users..sort((a, b) => (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0));
+  }
+
   /// Retrieves a cached user profile by ID.
   Future<types.User?> getCachedUser(String userId) async {
     final box = await _openUsersBox();
     final value = box.get(userId);
-    if (value == null || value is! Map) return null;
+    if (value == null) return null;
     try {
       final castedMap = _deepCastMap(value);
       return types.User.fromJson(castedMap);
     } catch (e) {
       return null;
     }
+  }
+
+  /// Removes a user from local cache.
+  Future<void> deleteUserFromCache(String userId) async {
+    final box = await _openUsersBox();
+    await box.delete(userId);
   }
 
 // --- Maintenance ---

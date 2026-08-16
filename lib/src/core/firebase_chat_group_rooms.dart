@@ -176,11 +176,20 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
 
   /// Query for group session rooms belonging to the current user.
   Query<Map<String, dynamic>> groupSessionRoomsQuery(Timestamp? updateTime) {
-    return _firestore
+    var query = _firestore
         .collection(_config.groupSessionRoomsCollection)
         .orderBy('updatedAt', descending: true)
-        .where('userIds', arrayContains: currentUserId)
-        .where('updatedAt', isGreaterThan: updateTime ?? Timestamp.fromMillisecondsSinceEpoch(0));
+        .where('userIds', arrayContains: currentUserId);
+
+    if (updateTime != null && updateTime.millisecondsSinceEpoch > 0) {
+      query = query.where('updatedAt', isGreaterThan: updateTime);
+    }
+    print('🔍 [FirebaseChatCore groupSessionRoomsQuery]');
+    print('   - Collection: ${_config.groupSessionRoomsCollection}');
+    print('   - UserID: $currentUserId');
+    print('   - updateTime (Filter): ${updateTime?.toDate()} (${updateTime?.millisecondsSinceEpoch}ms)');
+    print('   - Query Object: $query');
+    return query;
   }
 
   /// Emits a stream of group session rooms for current user from configured group session collection.
@@ -195,16 +204,22 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
       });
     }
 
-    final updateTime = Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0);
+    final resolvedUpdateTime = listFromCache.isNotEmpty
+        ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
+        : null;
 
     // 2. Query Firestore and update cache + emit
     StreamSubscription? subscription;
 
     try {
-      subscription = groupSessionRoomsQuery(updateTime).snapshots().listen(
+      subscription = groupSessionRoomsQuery(resolvedUpdateTime).snapshots().listen(
         (snapshot) async {
           try {
             final rooms = await _processRoomsQuery(snapshot);
+            if (rooms.isEmpty && listFromCache.isEmpty && !controller.isClosed) {
+              controller.add([]);
+              return;
+            }
             if (rooms.isEmpty) return;
 
             await ChatCacheManager.instance.saveRooms(currentUserId, rooms, isGroup: true);

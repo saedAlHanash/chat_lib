@@ -10,26 +10,35 @@ extension FirebaseChatHelpers on FirebaseChatCore {
   }
 
   Future<List<types.Room>> _processRoomsQuery(QuerySnapshot<Map<String, dynamic>> query) async {
-    final futures = query.docs.map((doc) => _processRoomDocument(doc));
-    return await Future.wait(futures);
+    final futures = query.docs.map((doc) async {
+      try {
+        return await _processRoomDocument(doc);
+      } catch (e, st) {
+        print('❌ [FirebaseChatCore _processRoomDocument Error on ${doc.id}]: $e');
+        print(st);
+        return null;
+      }
+    });
+    final results = await Future.wait(futures);
+    return results.whereType<types.Room>().toList();
   }
 
   Future<types.Room> _processRoomDocument(DocumentSnapshot<Map<String, dynamic>> doc) async {
-    final data = doc.data()!;
+    final data = Map<String, dynamic>.from(doc.data() ?? {});
     data['id'] = doc.id;
     data['createdAt'] = data['createdAt'] is Timestamp
         ? (data['createdAt'] as Timestamp).millisecondsSinceEpoch
-        : (data['createdAt'] ?? 0);
+        : (data['createdAt'] is num ? (data['createdAt'] as num).toInt() : (data['createdAt'] ?? 0));
     data['updatedAt'] = data['updatedAt'] is Timestamp
         ? (data['updatedAt'] as Timestamp).millisecondsSinceEpoch
-        : (data['updatedAt'] ?? 0);
+        : (data['updatedAt'] is num ? (data['updatedAt'] as num).toInt() : (data['updatedAt'] ?? 0));
 
     var imageUrl = data['imageUrl'] as String?;
     var name = data['name'] as String?;
-    final type = data['type'] as String;
-    final userIds = data['userIds'] as List<dynamic>;
+    final type = data['type'] as String? ?? types.RoomType.direct.toShortString();
+    final userIds = (data['userIds'] as List<dynamic>?) ?? [];
 
-    final users = await Future.wait(userIds.map((userId) => fetchUser(userId as String)));
+    final users = await Future.wait(userIds.map((userId) => fetchUser(userId.toString())));
     final otherUserId = userIds.firstWhereOrNull((uId) => uId.toString() != currentUserId)?.toString();
     final otherUser = users.firstWhereOrNull((u) => u.id != currentUserId);
 
@@ -40,22 +49,34 @@ extension FirebaseChatHelpers on FirebaseChatCore {
 
     data['imageUrl'] = imageUrl;
     data['name'] = name;
-    data['users'] = users.map((u) => u.toJson()).toList();
+    data['users'] = users.map((u) {
+      final json = u.toJson();
+      final r = json['role']?.toString().toLowerCase();
+      if (r != 'admin' && r != 'agent' && r != 'moderator' && r != 'user') {
+        json['role'] = 'user';
+      }
+      return json;
+    }).toList();
 
     if (data['latestMessage'] != null && data['latestMessage'] is Map) {
       final message = Map<String, dynamic>.from(data['latestMessage'] as Map);
       final authorId = message['authorId'] as String?;
       if (authorId != null) {
         final author = await fetchUser(authorId);
-        message['author'] = author.toJson();
+        final authorJson = author.toJson();
+        final r = authorJson['role']?.toString().toLowerCase();
+        if (r != 'admin' && r != 'agent' && r != 'moderator' && r != 'user') {
+          authorJson['role'] = 'user';
+        }
+        message['author'] = authorJson;
       }
       message['createdAt'] = message['createdAt'] is Timestamp
           ? (message['createdAt'] as Timestamp).millisecondsSinceEpoch
-          : (message['createdAt'] ?? 0);
+          : (message['createdAt'] is num ? (message['createdAt'] as num).toInt() : (message['createdAt'] ?? 0));
       message['id'] = doc.id; // Map room doc ID as temp message ID
       message['updatedAt'] = message['updatedAt'] is Timestamp
           ? (message['updatedAt'] as Timestamp).millisecondsSinceEpoch
-          : (message['updatedAt'] ?? 0);
+          : (message['updatedAt'] is num ? (message['updatedAt'] as num).toInt() : (message['updatedAt'] ?? 0));
       data['lastMessages'] = [message];
     }
 

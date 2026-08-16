@@ -102,12 +102,14 @@ extension FirebaseChatRooms on FirebaseChatCore {
       controller.add(listFromCache);
     }
 
-    final updateTime = Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0);
+    final resolvedUpdateTime = updateTime ?? (listFromCache.isNotEmpty
+        ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
+        : null);
 
     // 2. Query Firestore and update cache + emit
     StreamSubscription? subscription;
     try {
-      subscription = roomsQuery(updateTime).snapshots().listen(
+      subscription = roomsQuery(resolvedUpdateTime).snapshots().listen(
         (snapshot) async {
           try {
             final rooms = await _processRoomsQuery(snapshot);
@@ -115,6 +117,8 @@ extension FirebaseChatRooms on FirebaseChatCore {
               await ChatCacheManager.instance.saveRooms(currentUserId, rooms, isGroup: false);
               final updatedCached = await ChatCacheManager.instance.getCachedRooms(currentUserId);
               if (!controller.isClosed) controller.add(updatedCached);
+            } else if (listFromCache.isEmpty && !controller.isClosed) {
+              controller.add([]);
             }
           } catch (e, st) {
             print('❌ [FirebaseChatCore _processRoomsQuery Error]: $e');

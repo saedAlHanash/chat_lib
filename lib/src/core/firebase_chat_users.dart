@@ -67,16 +67,97 @@ extension FirebaseChatUsers on FirebaseChatCore {
   }
 
   /// Query for users in Firestore.
-  Query<Map<String, dynamic>> usersQuery(Timestamp updateTime) {
+  /// Helper to convert a User DocumentSnapshot to types.User safely converting Timestamps.
+  types.User _processUserDocument(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data() ?? {};
+    data['id'] = doc.id;
+    data['createdAt'] = data['createdAt'] is Timestamp
+        ? (data['createdAt'] as Timestamp).millisecondsSinceEpoch
+        : (data['createdAt'] is num ? (data['createdAt'] as num).toInt() : (data['createdAt'] ?? 0));
+    data['lastSeen'] = data['lastSeen'] is Timestamp
+        ? (data['lastSeen'] as Timestamp).millisecondsSinceEpoch
+        : (data['lastSeen'] is num ? (data['lastSeen'] as num).toInt() : (data['lastSeen'] ?? 0));
+    final validRoles = ['admin', 'agent', 'moderator', 'user'];
+    final rawRole = data['role']?.toString().toLowerCase();
+    data['role'] = validRoles.contains(rawRole) ? rawRole : types.Role.user.name;
+    data['updatedAt'] = data['updatedAt'] is Timestamp
+        ? (data['updatedAt'] as Timestamp).millisecondsSinceEpoch
+        : (data['updatedAt'] is num ? (data['updatedAt'] as num).toInt() : (data['updatedAt'] ?? 0));
+
+    return types.User.fromJson(data);
+  }
+
+  List<types.User> _processUsersQuery(QuerySnapshot<Map<String, dynamic>> snapshot) {
+    return snapshot.docs.map((doc) => _processUserDocument(doc)).toList();
+  }
+
+  /// Query for users in Firestore.
+  Query<Map<String, dynamic>> usersQuery(Timestamp? updateTime) {
     return _firestore
         .collection(_config.usersCollection)
         .orderBy('updatedAt', descending: true)
-        .where('updatedAt', isGreaterThan: updateTime);
+        .where('updatedAt', isGreaterThan: updateTime ?? Timestamp.fromMillisecondsSinceEpoch(0));
   }
 
-  /// Deletes a user document from Firestore users collection.
+  /// Emits a stream of users, synchronized with Firestore and cached locally via Hive.
+  Stream<List<types.User>> getUsersStream({Timestamp? updateTime}) {
+    final controller = StreamController<List<types.User>>.broadcast();
+    _initUsersStream(controller, updateTime);
+    return controller.stream;
+  }
+
+  Future<void> _initUsersStream(
+    StreamController<List<types.User>> controller,
+    Timestamp? updateTime,
+  ) async {
+    // 1. Emit cached users immediately
+    final cached = await ChatCacheManager.instance.getCachedUsers();
+    if (!controller.isClosed && cached.isNotEmpty) {
+      controller.add(cached);
+    }
+
+    final resolvedUpdateTime = updateTime ?? Timestamp.fromMillisecondsSinceEpoch(cached.firstOrNull?.updatedAt ?? 0);
+
+    // 2. Query Firestore and update cache + emit
+    StreamSubscription? subscription;
+    try {
+      subscription = usersQuery(resolvedUpdateTime).snapshots().listen(
+        (snapshot) async {
+          final usersList = _processUsersQuery(snapshot);
+
+          for (final user in usersList) {
+            if (user.firstName?.toLowerCase() == 'guest') {
+              await deleteUser(user.id);
+            }
+          }
+
+          final validUsers = usersList.where((u) => u.firstName?.toLowerCase() != 'guest' && u.id != '0').toList();
+
+          if (validUsers.isNotEmpty) {
+            await ChatCacheManager.instance.saveUsers(validUsers);
+            final updatedCached = await ChatCacheManager.instance.getCachedUsers();
+            if (!controller.isClosed) {
+              controller.add(updatedCached);
+            }
+          }
+        },
+        onError: (err) {
+          if (!controller.isClosed) controller.addError(err);
+        },
+      );
+    } catch (e) {
+      if (!controller.isClosed) controller.addError(e);
+    }
+
+    controller.onCancel = () {
+      subscription?.cancel();
+    };
+  }
+
+  /// Deletes a user document from Firestore users collection and local cache.
   Future<void> deleteUser(String id) async {
     await _firestore.collection(_config.usersCollection).doc(id).delete();
+    await ChatCacheManager.instance.deleteUserFromCache(id);
   }
 
   /// Helper to create a user with email.
@@ -101,22 +182,8 @@ extension FirebaseChatUsers on FirebaseChatCore {
   /// Retrieves a user profile from Firestore by ID.
   Future<types.User?> getUserFromFirestore(String userId) async {
     final doc = await _firestore.collection(_config.usersCollection).doc(userId).get();
-    final data = doc.data();
-    if (data == null) return null;
-
-    data['createdAt'] = data['createdAt'] is Timestamp
-        ? (data['createdAt'] as Timestamp).millisecondsSinceEpoch
-        : (data['createdAt'] ?? 0);
-    data['id'] = doc.id;
-    data['lastSeen'] = data['lastSeen'] is Timestamp
-        ? (data['lastSeen'] as Timestamp).millisecondsSinceEpoch
-        : (data['lastSeen'] ?? 0);
-    data['role'] = data['role'] ?? types.Role.user.name;
-    data['updatedAt'] = data['updatedAt'] is Timestamp
-        ? (data['updatedAt'] as Timestamp).millisecondsSinceEpoch
-        : (data['updatedAt'] ?? 0);
-
-    return types.User.fromJson(data);
+    if (!doc.exists || doc.data() == null) return null;
+    return _processUserDocument(doc);
   }
 
   /// Resolves user with local cache first (Read-Through Cache).

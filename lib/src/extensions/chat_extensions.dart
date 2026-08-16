@@ -44,7 +44,7 @@ extension RoomLibExtension on types.Room {
   bool get isSupport => users.any((e) => e.id == '0');
 
   /// Checks if room is a group room.
-  bool get isGroup => type == .group;
+  bool get isGroup => type == types.RoomType.group;
 
   /// Checks if a user (defaults to current user) is an admin in this room.
   bool isAdmin([String? targetUserId]) {
