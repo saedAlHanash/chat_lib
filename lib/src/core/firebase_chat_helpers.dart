@@ -2,8 +2,8 @@ part of 'firebase_chat_core.dart';
 
 /// Internal document processing and log helpers extension on [FirebaseChatCore].
 extension FirebaseChatHelpers on FirebaseChatCore {
-  String _getCollectionForRoom(String roomId, {RoomCategory? category}) {
-    if (category == RoomCategory.groupSession || roomId.startsWith('group_bundle_') || RegExp(r'^\d+$').hasMatch(roomId)) {
+  String _getCollectionForRoom(String roomId) {
+    if (RegExp(r'^\d+$').hasMatch(roomId)) {
       return _config.groupSessionRoomsCollection;
     }
     return _config.roomsCollection;

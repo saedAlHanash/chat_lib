@@ -8,16 +8,13 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
     String? id,
     String? imageUrl,
     List<types.User> users = const [],
-    RoomCategory category = RoomCategory.group,
     Map<String, dynamic>? metadata,
   }) async {
     final userIds = {currentUserId, ...users.map((u) => u.id)}.toList();
 
-    final initialMetadata = <String, dynamic>{...?metadata, 'adminId': currentUserId, 'category': category.toShortString()};
+    final initialMetadata = <String, dynamic>{...?metadata, 'adminId': currentUserId};
 
-    final collectionName = (category == RoomCategory.groupSession)
-        ? _config.groupSessionRoomsCollection
-        : _config.roomsCollection;
+    final collectionName = _config.groupSessionRoomsCollection;
 
     final docRef = id != null ? _firestore.collection(collectionName).doc(id) : _firestore.collection(collectionName).doc();
     final batch = _firestore.batch();
@@ -55,7 +52,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
 
   /// Adds users to an existing group room.
   Future<void> addUsersToGroup(String roomId, List<types.User> newUsers) async {
-    final collectionName = _getCollectionForRoom(roomId);
+    final collectionName = _config.groupSessionRoomsCollection;
     final docRef = _firestore.collection(collectionName).doc(roomId);
 
     final batch = _firestore.batch();
@@ -82,7 +79,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
 
   /// Removes a user from a group room.
   Future<void> removeUserFromGroup(String roomId, String userId) async {
-    final collectionName = _getCollectionForRoom(roomId);
+    final collectionName = _config.groupSessionRoomsCollection;
     final docRef = _firestore.collection(collectionName).doc(roomId);
 
     final batch = _firestore.batch();
@@ -100,7 +97,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
 
   /// Adds users by their String IDs to an existing group room.
   Future<void> addUsersToGroupByIds(String roomId, List<String> newUserIds) async {
-    final collectionName = _getCollectionForRoom(roomId);
+    final collectionName = _config.groupSessionRoomsCollection;
     final docRef = _firestore.collection(collectionName).doc(roomId);
 
     final batch = _firestore.batch();
@@ -129,7 +126,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
 
   /// Updates user role in a group room (e.g. promote to admin or demote to user).
   Future<void> updateUserGroupRole(String roomId, String userId, types.Role role) async {
-    final collectionName = _getCollectionForRoom(roomId);
+    final collectionName = _config.groupSessionRoomsCollection;
     final docRef = _firestore.collection(collectionName).doc(roomId);
     final memberRef = docRef.collection('members').doc(userId);
 
@@ -150,7 +147,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
     bool? canSendMedia,
     bool? isBanned,
   }) async {
-    final collectionName = _getCollectionForRoom(roomId);
+    final collectionName = _config.groupSessionRoomsCollection;
     final docRef = _firestore.collection(collectionName).doc(roomId);
     final memberRef = docRef.collection('members').doc(userId);
 

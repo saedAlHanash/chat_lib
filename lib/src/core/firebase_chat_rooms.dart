@@ -17,13 +17,23 @@ extension FirebaseChatRooms on FirebaseChatCore {
 
     final result = await _firestore
         .collection(_config.roomsCollection)
-        .orderBy('updatedAt', descending: true)
         .where('userIds', isEqualTo: userIds)
         .limit(1)
         .get();
 
     final rooms = await _processRoomsQuery(result);
     return rooms.firstOrNull;
+  }
+
+  /// Retrieves a room by its ID.
+  Future<types.Room?> getRoomByRoomId(String roomId) async {
+    final collection = _getCollectionForRoom(roomId);
+    final docSnap = await _firestore.collection(collection).doc(roomId).get();
+
+    if (!docSnap.exists) return null;
+
+    final room = await _processRoomDocument(docSnap);
+    return room;
   }
 
   /// Creates a direct chatroom with another user.
