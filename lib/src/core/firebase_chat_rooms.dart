@@ -29,7 +29,7 @@ extension FirebaseChatRooms on FirebaseChatCore {
     if (querySnapshot.docs.isNotEmpty) {
       final doc = querySnapshot.docs.first;
       final room = await _processRoomDocument(doc);
-      await ChatCacheManager.instance.saveDirectRoom(currentUserId, room);
+      await ChatCacheManager.instance.saveDirectRoom(room);
       return room;
     }
 
@@ -47,7 +47,7 @@ extension FirebaseChatRooms on FirebaseChatCore {
 
     final docSnap = await docRef.get();
     final room = await _processRoomDocument(docSnap);
-    await ChatCacheManager.instance.saveDirectRoom(currentUserId, room);
+    await ChatCacheManager.instance.saveDirectRoom(room);
     return room;
   }
 
@@ -64,7 +64,7 @@ extension FirebaseChatRooms on FirebaseChatCore {
     if (querySnapshot.docs.isNotEmpty) {
       final doc = querySnapshot.docs.first;
       final room = await _processRoomDocument(doc);
-      await ChatCacheManager.instance.saveDirectRoom(currentUserId, room);
+      await ChatCacheManager.instance.saveDirectRoom(room);
       return room;
     }
     return null;
@@ -78,14 +78,16 @@ extension FirebaseChatRooms on FirebaseChatCore {
     controller = StreamController<List<types.Room>>.broadcast(
       onListen: () async {
         // 1. Emit cached direct rooms immediately upon subscription
-        final listFromCache = await ChatCacheManager.instance.getCachedDirectRooms(currentUserId);
+        final listFromCache = await ChatCacheManager.instance.getCachedDirectRooms();
         if (!controller.isClosed && listFromCache.isNotEmpty) {
           controller.add(listFromCache);
         }
 
-        final resolvedUpdateTime = updateTime ?? (listFromCache.isNotEmpty
-            ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
-            : null);
+        final resolvedUpdateTime =
+            updateTime ??
+            (listFromCache.isNotEmpty
+                ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
+                : null);
 
         // 2. Query Firestore and update cache + emit
         try {
@@ -94,8 +96,8 @@ extension FirebaseChatRooms on FirebaseChatCore {
               try {
                 final rooms = await _processRoomsQuery(snapshot);
                 if (rooms.isNotEmpty) {
-                  await ChatCacheManager.instance.saveDirectRooms(currentUserId, rooms);
-                  final updatedCached = await ChatCacheManager.instance.getCachedDirectRooms(currentUserId);
+                  await ChatCacheManager.instance.saveDirectRooms(rooms);
+                  final updatedCached = await ChatCacheManager.instance.getCachedDirectRooms();
                   if (!controller.isClosed) controller.add(updatedCached);
                 } else if (listFromCache.isEmpty && !controller.isClosed) {
                   controller.add([]);
@@ -132,20 +134,20 @@ extension FirebaseChatRooms on FirebaseChatCore {
     controller = StreamController<List<types.Room>>.broadcast(
       onListen: () async {
         // 1. Emit cached direct rooms immediately upon subscription
-        final listFromCache = await ChatCacheManager.instance.getCachedDirectRooms('all_rooms');
+        final listFromCache = await ChatCacheManager.instance.getCachedDirectRooms(userId: ChatCacheBoxes.allRoomsKey);
         if (!controller.isClosed && listFromCache.isNotEmpty) {
           controller.add(listFromCache);
         }
 
-        final resolvedUpdateTime = updateTime ?? (listFromCache.isNotEmpty
-            ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
-            : null);
+        final resolvedUpdateTime =
+            updateTime ??
+            (listFromCache.isNotEmpty
+                ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
+                : null);
 
         // 2. Query Firestore and update cache + emit
         try {
-          var query = _firestore
-              .collection(_config.roomsCollection)
-              .orderBy('updatedAt', descending: true);
+          var query = _firestore.collection(_config.roomsCollection).orderBy('updatedAt', descending: true);
 
           if (resolvedUpdateTime != null && resolvedUpdateTime.millisecondsSinceEpoch > 0) {
             query = query.where('updatedAt', isGreaterThan: resolvedUpdateTime);
@@ -156,8 +158,8 @@ extension FirebaseChatRooms on FirebaseChatCore {
               try {
                 final rooms = await _processRoomsQuery(snapshot);
                 if (rooms.isNotEmpty) {
-                  await ChatCacheManager.instance.saveDirectRooms('all_rooms', rooms);
-                  final updatedCached = await ChatCacheManager.instance.getCachedDirectRooms('all_rooms');
+                  await ChatCacheManager.instance.saveDirectRooms(rooms, userId: ChatCacheBoxes.allRoomsKey);
+                  final updatedCached = await ChatCacheManager.instance.getCachedDirectRooms(userId: ChatCacheBoxes.allRoomsKey);
                   if (!controller.isClosed) controller.add(updatedCached);
                 } else if (listFromCache.isEmpty && !controller.isClosed) {
                   controller.add([]);
@@ -202,7 +204,7 @@ extension FirebaseChatRooms on FirebaseChatCore {
       print('🔍 [getRooms] Processed ${rooms.length} room object(s).');
 
       if (rooms.isNotEmpty) {
-        await ChatCacheManager.instance.saveDirectRooms(currentUserId, rooms);
+        await ChatCacheManager.instance.saveDirectRooms(rooms);
       }
       return rooms;
     } catch (e, st) {

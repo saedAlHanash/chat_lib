@@ -35,10 +35,10 @@ class FirebaseChatCore {
   bool _isInitialized = false;
 
   /// Initializes the FirebaseChatCore service with configuration.
-  void initialize(ChatConfig config) {
+  Future<void> initialize(ChatConfig config) async {
     _config = config;
     _isInitialized = true;
-    ChatCacheManager.instance.init(
+    await ChatCacheManager.instance.init(
       version: config.cacheVersion,
       directRoomsSeedAssetPath: config.directRoomsSeedAssetPath,
       groupRoomsSeedAssetPath: config.groupRoomsSeedAssetPath,
@@ -77,8 +77,8 @@ class FirebaseChatCore {
   /// Exports all cached direct rooms, group rooms, and users as individual JSON files into a directory.
   Future<Map<String, String>> exportAllSeedFiles(
     String directoryPath, {
-    String directRoomsKey = 'all_rooms',
-    String groupRoomsKey = 'all_group_rooms',
+    String directRoomsKey = ChatCacheBoxes.allRoomsKey,
+    String groupRoomsKey = ChatCacheBoxes.allGroupRoomsKey,
     bool pretty = true,
   }) =>
       ChatCacheManager.instance.exportAllSeedFiles(
@@ -89,11 +89,11 @@ class FirebaseChatCore {
       );
 
   /// Seeds direct rooms from asset if the direct rooms box is empty.
-  Future<void> seedDirectRoomsFromAsset(String assetPath, {String userId = 'all_rooms'}) =>
+  Future<void> seedDirectRoomsFromAsset(String assetPath, {String userId = ChatCacheBoxes.allRoomsKey}) =>
       ChatCacheManager.instance.seedDirectRoomsFromAsset(assetPath, userId: userId);
 
   /// Seeds group rooms from asset if the group rooms box is empty.
-  Future<void> seedGroupRoomsFromAsset(String assetPath, {String userId = 'all_group_rooms'}) =>
+  Future<void> seedGroupRoomsFromAsset(String assetPath, {String userId = ChatCacheBoxes.allGroupRoomsKey}) =>
       ChatCacheManager.instance.seedGroupRoomsFromAsset(assetPath, userId: userId);
 
   /// Seeds users from asset if the users box is empty.

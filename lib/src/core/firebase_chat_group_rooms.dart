@@ -46,7 +46,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
 
     final docSnap = await docRef.get();
     final room = await _processRoomDocument(docSnap);
-    await ChatCacheManager.instance.saveGroupRoom(currentUserId, room);
+    await ChatCacheManager.instance.saveGroupRoom(room);
     return room;
   }
 
@@ -221,7 +221,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
     controller = StreamController<List<types.Room>>.broadcast(
       onListen: () async {
         // 1. Emit cached group rooms immediately upon subscription
-        final listFromCache = await ChatCacheManager.instance.getCachedGroupRooms(currentUserId);
+        final listFromCache = await ChatCacheManager.instance.getCachedGroupRooms();
         if (!controller.isClosed && listFromCache.isNotEmpty) {
           controller.add(listFromCache);
         }
@@ -242,8 +242,8 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
                 }
                 if (rooms.isEmpty) return;
 
-                await ChatCacheManager.instance.saveGroupRooms(currentUserId, rooms);
-                final updatedCached = await ChatCacheManager.instance.getCachedGroupRooms(currentUserId);
+                await ChatCacheManager.instance.saveGroupRooms(rooms);
+                final updatedCached = await ChatCacheManager.instance.getCachedGroupRooms();
                 if (!controller.isClosed) controller.add(updatedCached);
               } catch (e, st) {
                 print('❌ [FirebaseChatCore getGroupSessionRoomsStream process Error]: $e');
@@ -277,7 +277,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
     controller = StreamController<List<types.Room>>.broadcast(
       onListen: () async {
         // 1. Emit cached group rooms immediately upon subscription
-        final listFromCache = await ChatCacheManager.instance.getCachedGroupRooms('all_group_rooms');
+        final listFromCache = await ChatCacheManager.instance.getCachedGroupRooms(userId: ChatCacheBoxes.allGroupRoomsKey);
         if (!controller.isClosed && listFromCache.isNotEmpty) {
           controller.add(listFromCache);
         }
@@ -301,8 +301,8 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
               try {
                 final rooms = await _processRoomsQuery(snapshot);
                 if (rooms.isNotEmpty) {
-                  await ChatCacheManager.instance.saveGroupRooms('all_group_rooms', rooms);
-                  final updatedCached = await ChatCacheManager.instance.getCachedGroupRooms('all_group_rooms');
+                  await ChatCacheManager.instance.saveGroupRooms(rooms, userId: ChatCacheBoxes.allGroupRoomsKey);
+                  final updatedCached = await ChatCacheManager.instance.getCachedGroupRooms(userId: ChatCacheBoxes.allGroupRoomsKey);
                   if (!controller.isClosed) controller.add(updatedCached);
                 } else if (listFromCache.isEmpty && !controller.isClosed) {
                   controller.add([]);
@@ -341,7 +341,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
 
       final rooms = await _processRoomsQuery(querySnapshot);
       if (rooms.isNotEmpty) {
-        await ChatCacheManager.instance.saveGroupRooms(currentUserId, rooms);
+        await ChatCacheManager.instance.saveGroupRooms(rooms);
       }
       return rooms;
     } catch (e, st) {

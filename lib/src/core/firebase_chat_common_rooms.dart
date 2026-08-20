@@ -11,14 +11,14 @@ extension FirebaseChatCommonRooms on FirebaseChatCore {
 
     final room = await _processRoomDocument(docSnap);
     if (room.isGroup) {
-      await ChatCacheManager.instance.saveGroupRoom(currentUserId, room);
-      if (currentUserId != 'all_group_rooms') {
-        await ChatCacheManager.instance.saveGroupRoom('all_group_rooms', room);
+      await ChatCacheManager.instance.saveGroupRoom(room);
+      if (currentUserId != ChatCacheBoxes.allGroupRoomsKey) {
+        await ChatCacheManager.instance.saveGroupRoom(room, userId: ChatCacheBoxes.allGroupRoomsKey);
       }
     } else {
-      await ChatCacheManager.instance.saveDirectRoom(currentUserId, room);
-      if (currentUserId != 'all_rooms') {
-        await ChatCacheManager.instance.saveDirectRoom('all_rooms', room);
+      await ChatCacheManager.instance.saveDirectRoom(room);
+      if (currentUserId != ChatCacheBoxes.allRoomsKey) {
+        await ChatCacheManager.instance.saveDirectRoom(room, userId: ChatCacheBoxes.allRoomsKey);
       }
     }
     return room;
@@ -28,7 +28,7 @@ extension FirebaseChatCommonRooms on FirebaseChatCore {
   Future<types.Room> latestSeenRoom(types.Room room) async {
     final collection = _getCollectionForRoom(room.id);
     try {
-       _firestore.collection(collection).doc(room.id).update({
+      _firestore.collection(collection).doc(room.id).update({
         'latestSeen$currentUserId': FieldValue.serverTimestamp(),
         'isOnline$currentUserId': false,
       });
@@ -46,14 +46,14 @@ extension FirebaseChatCommonRooms on FirebaseChatCore {
 
     // Save to Hive cache for current user and all_rooms
     if (updatedRoom.isGroup) {
-      await ChatCacheManager.instance.saveGroupRoom(currentUserId, updatedRoom);
-      if (currentUserId != 'all_group_rooms') {
-        await ChatCacheManager.instance.saveGroupRoom('all_group_rooms', updatedRoom);
+      await ChatCacheManager.instance.saveGroupRoom(updatedRoom);
+      if (currentUserId != ChatCacheBoxes.allGroupRoomsKey) {
+        await ChatCacheManager.instance.saveGroupRoom(updatedRoom, userId: ChatCacheBoxes.allGroupRoomsKey);
       }
     } else {
-      await ChatCacheManager.instance.saveDirectRoom(currentUserId, updatedRoom);
-      if (currentUserId != 'all_rooms') {
-        await ChatCacheManager.instance.saveDirectRoom('all_rooms', updatedRoom);
+      await ChatCacheManager.instance.saveDirectRoom(updatedRoom);
+      if (currentUserId != ChatCacheBoxes.allRoomsKey) {
+        await ChatCacheManager.instance.saveDirectRoom(updatedRoom, userId: ChatCacheBoxes.allRoomsKey);
       }
     }
     return updatedRoom;
@@ -71,13 +71,13 @@ extension FirebaseChatCommonRooms on FirebaseChatCore {
   Future<void> deleteRoom(String roomId) async {
     final collection = _getCollectionForRoom(roomId);
     await _firestore.collection(collection).doc(roomId).delete();
-    await ChatCacheManager.instance.deleteDirectRoomFromCache(currentUserId, roomId);
-    await ChatCacheManager.instance.deleteGroupRoomFromCache(currentUserId, roomId);
-    if (currentUserId != 'all_rooms') {
-      await ChatCacheManager.instance.deleteDirectRoomFromCache('all_rooms', roomId);
+    await ChatCacheManager.instance.deleteDirectRoomFromCache(roomId);
+    await ChatCacheManager.instance.deleteGroupRoomFromCache(roomId);
+    if (currentUserId != ChatCacheBoxes.allRoomsKey) {
+      await ChatCacheManager.instance.deleteDirectRoomFromCache(roomId, userId: ChatCacheBoxes.allRoomsKey);
     }
-    if (currentUserId != 'all_group_rooms') {
-      await ChatCacheManager.instance.deleteGroupRoomFromCache('all_group_rooms', roomId);
+    if (currentUserId != ChatCacheBoxes.allGroupRoomsKey) {
+      await ChatCacheManager.instance.deleteGroupRoomFromCache(roomId, userId: ChatCacheBoxes.allGroupRoomsKey);
     }
   }
 }

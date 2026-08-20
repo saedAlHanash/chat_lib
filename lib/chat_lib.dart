@@ -4,4 +4,5 @@ export 'package:cloud_firestore/cloud_firestore.dart' show Timestamp, FieldValue
 export 'src/config/chat_config.dart';
 export 'src/core/firebase_chat_core.dart';
 export 'src/cache/chat_cache_manager.dart';
+export 'src/cache/chat_cache_boxes.dart';
 export 'src/extensions/chat_extensions.dart';
