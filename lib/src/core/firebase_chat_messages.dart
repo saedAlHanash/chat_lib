@@ -205,53 +205,48 @@ extension FirebaseChatMessages on FirebaseChatCore {
 
   /// Emits a stream of messages in a room, synchronized with Firestore and cached locally.
   Stream<List<types.Message>> getMessagesStream({required String roomId, Timestamp? updateTime}) {
-    final controller = StreamController<List<types.Message>>.broadcast();
-    _initMessagesStream(controller, roomId, updateTime);
-    return controller.stream;
-  }
-
-  Future<void> _initMessagesStream(
-    StreamController<List<types.Message>> controller,
-    String roomId,
-    Timestamp? updateTime,
-  ) async {
-    // 1. Emit cached messages immediately
-    final cached = await ChatCacheManager.instance.getCachedMessages(roomId, currentUserId);
-    if (!controller.isClosed && cached.isNotEmpty) {
-      // Sort newest first
-      cached.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
-      controller.add(cached);
-    }
-
-    final resolvedUpdateTime = updateTime ?? Timestamp.fromMillisecondsSinceEpoch(cached.firstOrNull?.updatedAt ?? 0);
-
-    // 2. Query Firestore and update cache + emit
+    late StreamController<List<types.Message>> controller;
     StreamSubscription? subscription;
-    try {
-      subscription = messagesQuery(resolvedUpdateTime, roomId).snapshots().listen(
-        (snapshot) async {
-          final messagesList = await _processMessagesQuery(snapshot);
 
-          if (messagesList.isNotEmpty) {
-            await ChatCacheManager.instance.saveMessages(roomId, currentUserId, messagesList);
-            final updatedCached = await ChatCacheManager.instance.getCachedMessages(roomId, currentUserId);
-            // Sort newest first
-            updatedCached.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
-            if (!controller.isClosed) {
-              controller.add(updatedCached);
-            }
-          }
-        },
-        onError: (err) {
-          if (!controller.isClosed) controller.addError(err);
-        },
-      );
-    } catch (e) {
-      if (!controller.isClosed) controller.addError(e);
-    }
+    controller = StreamController<List<types.Message>>.broadcast(
+      onListen: () async {
+        // 1. Emit cached messages immediately upon subscription
+        final cached = await ChatCacheManager.instance.getCachedMessages(roomId);
+        if (!controller.isClosed && cached.isNotEmpty) {
+          cached.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
+          controller.add(cached);
+        }
 
-    controller.onCancel = () {
-      subscription?.cancel();
-    };
+        final resolvedUpdateTime = updateTime ?? Timestamp.fromMillisecondsSinceEpoch(cached.firstOrNull?.updatedAt ?? 0);
+
+        // 2. Query Firestore and update cache + emit
+        try {
+          subscription = messagesQuery(resolvedUpdateTime, roomId).snapshots().listen(
+            (snapshot) async {
+              final messagesList = await _processMessagesQuery(snapshot);
+
+              if (messagesList.isNotEmpty) {
+                await ChatCacheManager.instance.saveMessages(roomId, messagesList);
+                final updatedCached = await ChatCacheManager.instance.getCachedMessages(roomId);
+                updatedCached.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
+                if (!controller.isClosed) {
+                  controller.add(updatedCached);
+                }
+              }
+            },
+            onError: (err) {
+              if (!controller.isClosed) controller.addError(err);
+            },
+          );
+        } catch (e) {
+          if (!controller.isClosed) controller.addError(e);
+        }
+      },
+      onCancel: () {
+        subscription?.cancel();
+      },
+    );
+
+    return controller.stream;
   }
 }

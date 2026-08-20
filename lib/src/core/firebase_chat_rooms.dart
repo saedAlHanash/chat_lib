@@ -2,47 +2,38 @@ part of 'firebase_chat_core.dart';
 
 /// Direct (1-to-1) rooms operations extension on [FirebaseChatCore].
 extension FirebaseChatRooms on FirebaseChatCore {
-  /// Query for rooms belonging to the current user.
+  /// Query for direct rooms belonging to current user.
   Query<Map<String, dynamic>> roomsQuery(Timestamp? updateTime) {
-    return _firestore
+    var query = _firestore
         .collection(_config.roomsCollection)
         .orderBy('updatedAt', descending: true)
-        .where('userIds', arrayContains: currentUserId)
-        .where('updatedAt', isGreaterThan: updateTime ?? Timestamp.fromMillisecondsSinceEpoch(0));
+        .where('userIds', arrayContains: currentUserId);
+
+    if (updateTime != null && updateTime.millisecondsSinceEpoch > 0) {
+      query = query.where('updatedAt', isGreaterThan: updateTime);
+    }
+    return query;
   }
 
-  /// Retrieves a direct room by other user's ID.
-  Future<types.Room?> getRoomByUserId(String otherUserId) async {
+  /// Creates a direct chat room between the current user and [otherUserId].
+  Future<types.Room> createRoom(String otherUserId) async {
     final userIds = [currentUserId, otherUserId]..sort();
 
-    final result = await _firestore
+    // Check existing room
+    final querySnapshot = await _firestore
         .collection(_config.roomsCollection)
         .where('userIds', isEqualTo: userIds)
         .limit(1)
         .get();
 
-    final rooms = await _processRoomsQuery(result);
-    return rooms.firstOrNull;
-  }
+    if (querySnapshot.docs.isNotEmpty) {
+      final doc = querySnapshot.docs.first;
+      final room = await _processRoomDocument(doc);
+      await ChatCacheManager.instance.saveDirectRoom(currentUserId, room);
+      return room;
+    }
 
-  /// Retrieves a room by its ID.
-  Future<types.Room?> getRoomByRoomId(String roomId) async {
-    final collection = _getCollectionForRoom(roomId);
-    final docSnap = await _firestore.collection(collection).doc(roomId).get();
-
-    if (!docSnap.exists) return null;
-
-    final room = await _processRoomDocument(docSnap);
-    return room;
-  }
-
-  /// Creates a direct chatroom with another user.
-  Future<types.Room> createRoom(String otherUserId) async {
-    final existingRoom = await getRoomByUserId(otherUserId);
-    if (existingRoom != null) return existingRoom;
-
-    final userIds = [currentUserId, otherUserId]..sort();
-
+    // Create room
     final docRef = await _firestore.collection(_config.roomsCollection).add({
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
@@ -56,94 +47,146 @@ extension FirebaseChatRooms on FirebaseChatCore {
 
     final docSnap = await docRef.get();
     final room = await _processRoomDocument(docSnap);
-    await ChatCacheManager.instance.saveRoom(currentUserId, room);
+    await ChatCacheManager.instance.saveDirectRoom(currentUserId, room);
     return room;
   }
 
-  /// Updates the latest seen timestamp for the current user in a room.
-  Future<void> latestSeenRoom(types.Room room) async {
-    final collection = _getCollectionForRoom(room.id);
-    try {
-      await _firestore.collection(collection).doc(room.id).update({
-        'latestSeen$currentUserId': FieldValue.serverTimestamp(),
-        'isOnline$currentUserId': false,
-      });
-    } catch (_) {}
+  /// Fetches an existing direct room by other user ID, or returns null.
+  Future<types.Room?> getRoomByUserId(String otherUserId) async {
+    final userIds = [currentUserId, otherUserId]..sort();
 
-    // Update local metadata
-    final metadata = Map<String, dynamic>.from(room.metadata ?? {});
-    final nowMillis = DateTime.now().millisecondsSinceEpoch;
-    metadata['latestSeen'] = nowMillis;
-    metadata['latestSeen$currentUserId'] = nowMillis;
+    final querySnapshot = await _firestore
+        .collection(_config.roomsCollection)
+        .where('userIds', isEqualTo: userIds)
+        .limit(1)
+        .get();
 
-    final updatedRoom = room.copyWith(metadata: metadata);
-    final isGroup = room.type == types.RoomType.group || RegExp(r'^\d+$').hasMatch(room.id);
-    await ChatCacheManager.instance.saveRoom(currentUserId, updatedRoom);
-    if (isGroup) {
-      await ChatCacheManager.instance.saveRooms(currentUserId, [updatedRoom], isGroup: true);
+    if (querySnapshot.docs.isNotEmpty) {
+      final doc = querySnapshot.docs.first;
+      final room = await _processRoomDocument(doc);
+      await ChatCacheManager.instance.saveDirectRoom(currentUserId, room);
+      return room;
     }
+    return null;
   }
 
-  /// Sets the current user's online state in a room.
-  Future<void> setMyState(types.Room room, bool isOnline) async {
-    final collection = _getCollectionForRoom(room.id);
-    try {
-      await _firestore.collection(collection).doc(room.id).update({'isOnline$currentUserId': isOnline});
-    } catch (_) {}
-  }
-
-  /// Emits a stream of rooms for the current user, synchronized with Firestore and cached locally.
-  Future<Stream<List<types.Room>>> getRoomsStream({Timestamp? updateTime}) async {
-    final controller = StreamController<List<types.Room>>.broadcast();
-
-    // 1. Emit cached direct rooms immediately
-    final listFromCache = await ChatCacheManager.instance.getCachedRooms(currentUserId);
-    if (!controller.isClosed && listFromCache.isNotEmpty) {
-      controller.add(listFromCache);
-    }
-
-    final resolvedUpdateTime = updateTime ?? (listFromCache.isNotEmpty
-        ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
-        : null);
-
-    // 2. Query Firestore and update cache + emit
+  /// Emits a stream of direct rooms for the current user, synchronized with Firestore and cached locally.
+  Stream<List<types.Room>> getRoomsStream({Timestamp? updateTime}) {
+    late StreamController<List<types.Room>> controller;
     StreamSubscription? subscription;
-    try {
-      subscription = roomsQuery(resolvedUpdateTime).snapshots().listen(
-        (snapshot) async {
-          try {
-            final rooms = await _processRoomsQuery(snapshot);
-            if (rooms.isNotEmpty) {
-              await ChatCacheManager.instance.saveRooms(currentUserId, rooms, isGroup: false);
-              final updatedCached = await ChatCacheManager.instance.getCachedRooms(currentUserId);
-              if (!controller.isClosed) controller.add(updatedCached);
-            } else if (listFromCache.isEmpty && !controller.isClosed) {
-              controller.add([]);
-            }
-          } catch (e, st) {
-            print('❌ [FirebaseChatCore _processRoomsQuery Error]: $e');
-            print(st);
-            if (!controller.isClosed) controller.addError(e);
-          }
-        },
-        onError: (err) {
-          print('❌ [FirebaseChatCore roomsQuery onError]: $err');
-          if (!controller.isClosed) controller.addError(err);
-        },
-      );
-    } catch (e) {
-      print('❌ [FirebaseChatCore getRoomsStream catch]: $e');
-      controller.addError(e);
-    }
 
-    controller.onCancel = () {
-      subscription?.cancel();
-    };
+    controller = StreamController<List<types.Room>>.broadcast(
+      onListen: () async {
+        // 1. Emit cached direct rooms immediately upon subscription
+        final listFromCache = await ChatCacheManager.instance.getCachedDirectRooms(currentUserId);
+        if (!controller.isClosed && listFromCache.isNotEmpty) {
+          controller.add(listFromCache);
+        }
+
+        final resolvedUpdateTime = updateTime ?? (listFromCache.isNotEmpty
+            ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
+            : null);
+
+        // 2. Query Firestore and update cache + emit
+        try {
+          subscription = roomsQuery(resolvedUpdateTime).snapshots().listen(
+            (snapshot) async {
+              try {
+                final rooms = await _processRoomsQuery(snapshot);
+                if (rooms.isNotEmpty) {
+                  await ChatCacheManager.instance.saveDirectRooms(currentUserId, rooms);
+                  final updatedCached = await ChatCacheManager.instance.getCachedDirectRooms(currentUserId);
+                  if (!controller.isClosed) controller.add(updatedCached);
+                } else if (listFromCache.isEmpty && !controller.isClosed) {
+                  controller.add([]);
+                }
+              } catch (e, st) {
+                print('❌ [FirebaseChatCore _processRoomsQuery Error]: $e');
+                print(st);
+                if (!controller.isClosed) controller.addError(e);
+              }
+            },
+            onError: (err) {
+              print('❌ [FirebaseChatCore roomsQuery onError]: $err');
+              if (!controller.isClosed) controller.addError(err);
+            },
+          );
+        } catch (e) {
+          print('❌ [FirebaseChatCore getRoomsStream catch]: $e');
+          if (!controller.isClosed) controller.addError(e);
+        }
+      },
+      onCancel: () {
+        subscription?.cancel();
+      },
+    );
 
     return controller.stream;
   }
 
-  /// Direct one-time fetch of rooms for the current user from Firestore.
+  /// Emits a stream of ALL direct rooms (for admin/monitoring), synchronized with Firestore and cached locally.
+  Stream<List<types.Room>> getAllRoomsStream({Timestamp? updateTime}) {
+    late StreamController<List<types.Room>> controller;
+    StreamSubscription? subscription;
+
+    controller = StreamController<List<types.Room>>.broadcast(
+      onListen: () async {
+        // 1. Emit cached direct rooms immediately upon subscription
+        final listFromCache = await ChatCacheManager.instance.getCachedDirectRooms('all_rooms');
+        if (!controller.isClosed && listFromCache.isNotEmpty) {
+          controller.add(listFromCache);
+        }
+
+        final resolvedUpdateTime = updateTime ?? (listFromCache.isNotEmpty
+            ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
+            : null);
+
+        // 2. Query Firestore and update cache + emit
+        try {
+          var query = _firestore
+              .collection(_config.roomsCollection)
+              .orderBy('updatedAt', descending: true);
+
+          if (resolvedUpdateTime != null && resolvedUpdateTime.millisecondsSinceEpoch > 0) {
+            query = query.where('updatedAt', isGreaterThan: resolvedUpdateTime);
+          }
+
+          subscription = query.snapshots().listen(
+            (snapshot) async {
+              try {
+                final rooms = await _processRoomsQuery(snapshot);
+                if (rooms.isNotEmpty) {
+                  await ChatCacheManager.instance.saveDirectRooms('all_rooms', rooms);
+                  final updatedCached = await ChatCacheManager.instance.getCachedDirectRooms('all_rooms');
+                  if (!controller.isClosed) controller.add(updatedCached);
+                } else if (listFromCache.isEmpty && !controller.isClosed) {
+                  controller.add([]);
+                }
+              } catch (e, st) {
+                print('❌ [FirebaseChatCore getAllRoomsStream Error]: $e');
+                print(st);
+                if (!controller.isClosed) controller.addError(e);
+              }
+            },
+            onError: (err) {
+              print('❌ [FirebaseChatCore getAllRoomsStream onError]: $err');
+              if (!controller.isClosed) controller.addError(err);
+            },
+          );
+        } catch (e) {
+          print('❌ [FirebaseChatCore getAllRoomsStream catch]: $e');
+          if (!controller.isClosed) controller.addError(e);
+        }
+      },
+      onCancel: () {
+        subscription?.cancel();
+      },
+    );
+
+    return controller.stream;
+  }
+
+  /// Direct one-time fetch of direct rooms for the current user from Firestore.
   Future<List<types.Room>> getRooms() async {
     try {
       print('🔍 [getRooms] Querying Firestore for userIds arrayContains "$currentUserId"...');
@@ -159,7 +202,7 @@ extension FirebaseChatRooms on FirebaseChatCore {
       print('🔍 [getRooms] Processed ${rooms.length} room object(s).');
 
       if (rooms.isNotEmpty) {
-        await ChatCacheManager.instance.saveRooms(currentUserId, rooms, isGroup: false);
+        await ChatCacheManager.instance.saveDirectRooms(currentUserId, rooms);
       }
       return rooms;
     } catch (e, st) {

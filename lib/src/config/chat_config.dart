@@ -25,10 +25,19 @@ class ChatConfig {
   final bool isTestMode;
 
   /// Delegate callback to handle file uploading.
-  /// When a message with local attachments (image, audio, file) is sent, the library
-  /// calls this delegate to upload the file to any storage service (e.g. custom server, S3, Firebase Storage)
-  /// and returns the uploaded file URL.
   final Future<String> Function(String filePath, {String? mimeType, Map<String, dynamic>? customArgs})? uploadDelegate;
+
+  /// Cache schema version. If incremented, local cache will be automatically purged and re-synced.
+  final int cacheVersion;
+
+  /// Optional bundled JSON asset path for direct rooms seed (e.g. 'assets/seed/direct_rooms_seed.json').
+  final String? directRoomsSeedAssetPath;
+
+  /// Optional bundled JSON asset path for group rooms seed (e.g. 'assets/seed/group_rooms_seed.json').
+  final String? groupRoomsSeedAssetPath;
+
+  /// Optional bundled JSON asset path for users seed (e.g. 'assets/seed/users_seed.json').
+  final String? usersSeedAssetPath;
 
   ChatConfig({
     required this.firestore,
@@ -37,6 +46,10 @@ class ChatConfig {
     this.groupSessionRoomsCollectionName = 'group_rooms',
     this.usersCollectionName = 'users',
     this.isTestMode = false,
+    this.cacheVersion = 1,
+    this.directRoomsSeedAssetPath,
+    this.groupRoomsSeedAssetPath,
+    this.usersSeedAssetPath,
     this.uploadDelegate,
   });
 

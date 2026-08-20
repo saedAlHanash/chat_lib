@@ -1,6 +1,15 @@
 import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
 import '../core/firebase_chat_core.dart';
 
+/// Extension methods for room ID strings.
+extension RoomIdExtension on String {
+  /// Checks if the room ID represents a numeric group session room.
+  bool get isGroupRoomId => RegExp(r'^\d+$').hasMatch(this);
+
+  /// Checks if the room ID represents a direct (1-to-1) room.
+  bool get isDirectRoomId => !isGroupRoomId;
+}
+
 /// Extension methods for [types.Room] in the chat package.
 extension RoomLibExtension on types.Room {
   /// Resolves the current user ID from the core service.
@@ -44,7 +53,10 @@ extension RoomLibExtension on types.Room {
   bool get isSupport => users.any((e) => e.id == '0');
 
   /// Checks if room is a group room.
-  bool get isGroup => type == types.RoomType.group;
+  bool get isGroup => type == types.RoomType.group || id.isGroupRoomId;
+
+  /// Checks if room is a direct (1-on-1) room.
+  bool get isDirect => !isGroup;
 
   /// Checks if a user (defaults to current user) is an admin in this room.
   bool isAdmin([String? targetUserId]) {
@@ -120,4 +132,43 @@ extension RoomLibExtension on types.Room {
     final uid = targetUserId ?? currentUserId;
     return isDeleted || isUserRemoved(uid);
   }
+}
+
+/// Extension methods for [types.User] in the chat package.
+extension UserLibExtension on types.User {
+  /// Full name of user.
+  String get name => '${firstName ?? ''} ${lastName ?? ''}'.trim();
+
+  /// Email of user from metadata.
+  String get email => metadata?['email']?.toString() ?? '';
+
+  /// Checks if user is a trainer or admin.
+  bool get isTrainer => metadata?['isTrainer'] == true || role == types.Role.admin;
+
+  /// Checks if user is a guest / placeholder.
+  bool get isGuest => firstName?.toLowerCase() == 'guest' || id == '0';
+}
+
+/// Extension methods for [types.Message] in the chat package.
+extension MessageLibExtension on types.Message {
+  /// Checks if the message is soft-deleted.
+  bool get isDeleted => metadata?['isDeleted'] == true;
+
+  /// Checks if the message was edited.
+  bool get isEdited => metadata?['isEdited'] == true;
+
+  /// Checks if the message was authored by [targetUserId].
+  bool isMine(String targetUserId) => author.id == targetUserId;
+
+  /// Checks if message is a text message.
+  bool get isTextMessage => type == types.MessageType.text;
+
+  /// Checks if message is an image message.
+  bool get isImageMessage => type == types.MessageType.image;
+
+  /// Checks if message is an audio message.
+  bool get isAudioMessage => type == types.MessageType.audio;
+
+  /// Checks if message is a file message.
+  bool get isFileMessage => type == types.MessageType.file;
 }

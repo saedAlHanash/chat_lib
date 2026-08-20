@@ -46,7 +46,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
 
     final docSnap = await docRef.get();
     final room = await _processRoomDocument(docSnap);
-    await ChatCacheManager.instance.saveRoom(currentUserId, room);
+    await ChatCacheManager.instance.saveGroupRoom(currentUserId, room);
     return room;
   }
 
@@ -139,29 +139,50 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
     await batch.commit();
   }
 
-  /// Updates user group permissions (canSendMessages, canSendMedia, isBanned).
+  /// Updates user group permissions (canSendMessages, canSendMedia, isBanned) directly in members subcollection.
   Future<void> updateUserGroupPermissions(
     String roomId,
     String userId, {
     bool? canSendMessages,
     bool? canSendMedia,
     bool? isBanned,
+    String? role,
   }) async {
-    final collectionName = _config.groupSessionRoomsCollection;
-    final docRef = _firestore.collection(collectionName).doc(roomId);
-    final memberRef = docRef.collection('members').doc(userId);
+    final collectionName = _getCollectionForRoom(roomId);
+    final memberRef = _firestore.collection(collectionName).doc(roomId).collection('members').doc(userId);
 
     final updates = <String, dynamic>{};
     if (canSendMessages != null) updates['canSendMessages'] = canSendMessages;
     if (canSendMedia != null) updates['canSendMedia'] = canSendMedia;
     if (isBanned != null) updates['isBanned'] = isBanned;
+    if (role != null) updates['role'] = role;
 
     if (updates.isNotEmpty) {
-      final batch = _firestore.batch();
-      batch.update(memberRef, updates);
-      batch.update(docRef, {'updatedAt': FieldValue.serverTimestamp()});
-      await batch.commit();
+      await memberRef.set(updates, SetOptions(merge: true));
     }
+  }
+
+  /// Emits a stream of member maps from the `members` subcollection of a group room.
+  Stream<List<Map<String, dynamic>>> getGroupMembersStream(String roomId) {
+    final collectionName = _getCollectionForRoom(roomId);
+    return _firestore
+        .collection(collectionName)
+        .doc(roomId)
+        .collection('members')
+        .snapshots()
+        .map((snap) => snap.docs.map((d) => {'id': d.id, ...d.data()}).toList());
+  }
+
+  /// Emits a stream of a specific user's member doc from `members/{userId}`.
+  Stream<Map<String, dynamic>?> getGroupMemberPermissionsStream(String roomId, String userId) {
+    final collectionName = _getCollectionForRoom(roomId);
+    return _firestore
+        .collection(collectionName)
+        .doc(roomId)
+        .collection('members')
+        .doc(userId)
+        .snapshots()
+        .map((snap) => snap.data());
   }
 
   /// Bans a user from a group room (sets isBanned = true).
@@ -193,57 +214,119 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
   }
 
   /// Emits a stream of group session rooms for current user from configured group session collection.
-  Future<Stream<List<types.Room>>> getGroupSessionRoomsStream() async {
-    final controller = StreamController<List<types.Room>>.broadcast();
-
-    // 1. Emit cached group rooms immediately
-    final listFromCache = await ChatCacheManager.instance.getCachedGroupRooms(currentUserId);
-    if (!controller.isClosed && listFromCache.isNotEmpty) {
-      Future(() {
-        controller.add(listFromCache);
-      });
-    }
-
-    final resolvedUpdateTime = listFromCache.isNotEmpty
-        ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
-        : null;
-
-    // 2. Query Firestore and update cache + emit
+  Stream<List<types.Room>> getGroupSessionRoomsStream() {
+    late StreamController<List<types.Room>> controller;
     StreamSubscription? subscription;
 
-    try {
-      subscription = groupSessionRoomsQuery(resolvedUpdateTime).snapshots().listen(
-        (snapshot) async {
-          try {
-            final rooms = await _processRoomsQuery(snapshot);
-            if (rooms.isEmpty && listFromCache.isEmpty && !controller.isClosed) {
-              controller.add([]);
-              return;
-            }
-            if (rooms.isEmpty) return;
+    controller = StreamController<List<types.Room>>.broadcast(
+      onListen: () async {
+        // 1. Emit cached group rooms immediately upon subscription
+        final listFromCache = await ChatCacheManager.instance.getCachedGroupRooms(currentUserId);
+        if (!controller.isClosed && listFromCache.isNotEmpty) {
+          controller.add(listFromCache);
+        }
 
-            await ChatCacheManager.instance.saveRooms(currentUserId, rooms, isGroup: true);
-            final updatedCached = await ChatCacheManager.instance.getCachedGroupRooms(currentUserId);
-            if (!controller.isClosed) controller.add(updatedCached);
-          } catch (e, st) {
-            print('❌ [FirebaseChatCore getGroupSessionRoomsStream process Error]: $e');
-            print(st);
-            if (!controller.isClosed) controller.addError(e);
+        final resolvedUpdateTime = listFromCache.isNotEmpty
+            ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
+            : null;
+
+        // 2. Query Firestore and update cache + emit
+        try {
+          subscription = groupSessionRoomsQuery(resolvedUpdateTime).snapshots().listen(
+            (snapshot) async {
+              try {
+                final rooms = await _processRoomsQuery(snapshot);
+                if (rooms.isEmpty && listFromCache.isEmpty && !controller.isClosed) {
+                  controller.add([]);
+                  return;
+                }
+                if (rooms.isEmpty) return;
+
+                await ChatCacheManager.instance.saveGroupRooms(currentUserId, rooms);
+                final updatedCached = await ChatCacheManager.instance.getCachedGroupRooms(currentUserId);
+                if (!controller.isClosed) controller.add(updatedCached);
+              } catch (e, st) {
+                print('❌ [FirebaseChatCore getGroupSessionRoomsStream process Error]: $e');
+                print(st);
+                if (!controller.isClosed) controller.addError(e);
+              }
+            },
+            onError: (err) {
+              print('❌ [FirebaseChatCore getGroupSessionRoomsStream onError]: $err');
+              if (!controller.isClosed) controller.addError(err);
+            },
+          );
+        } catch (e) {
+          print('❌ [FirebaseChatCore getGroupSessionRoomsStream catch]: $e');
+          if (!controller.isClosed) controller.addError(e);
+        }
+      },
+      onCancel: () {
+        subscription?.cancel();
+      },
+    );
+
+    return controller.stream;
+  }
+
+  /// Emits a stream of ALL group session rooms (for admin/monitoring), synchronized with Firestore and cached locally.
+  Stream<List<types.Room>> getAllGroupSessionRoomsStream({Timestamp? updateTime}) {
+    late StreamController<List<types.Room>> controller;
+    StreamSubscription? subscription;
+
+    controller = StreamController<List<types.Room>>.broadcast(
+      onListen: () async {
+        // 1. Emit cached group rooms immediately upon subscription
+        final listFromCache = await ChatCacheManager.instance.getCachedGroupRooms('all_group_rooms');
+        if (!controller.isClosed && listFromCache.isNotEmpty) {
+          controller.add(listFromCache);
+        }
+
+        final resolvedUpdateTime = updateTime ?? (listFromCache.isNotEmpty
+            ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
+            : null);
+
+        // 2. Query Firestore and update cache + emit
+        try {
+          var query = _firestore
+              .collection(_config.groupSessionRoomsCollection)
+              .orderBy('updatedAt', descending: true);
+
+          if (resolvedUpdateTime != null && resolvedUpdateTime.millisecondsSinceEpoch > 0) {
+            query = query.where('updatedAt', isGreaterThan: resolvedUpdateTime);
           }
-        },
-        onError: (err) {
-          print('❌ [FirebaseChatCore getGroupSessionRoomsStream onError]: $err');
-          if (!controller.isClosed) controller.addError(err);
-        },
-      );
-    } catch (e) {
-      print('❌ [FirebaseChatCore getGroupSessionRoomsStream catch]: $e');
-      controller.addError(e);
-    }
 
-    controller.onCancel = () {
-      subscription?.cancel();
-    };
+          subscription = query.snapshots().listen(
+            (snapshot) async {
+              try {
+                final rooms = await _processRoomsQuery(snapshot);
+                if (rooms.isNotEmpty) {
+                  await ChatCacheManager.instance.saveGroupRooms('all_group_rooms', rooms);
+                  final updatedCached = await ChatCacheManager.instance.getCachedGroupRooms('all_group_rooms');
+                  if (!controller.isClosed) controller.add(updatedCached);
+                } else if (listFromCache.isEmpty && !controller.isClosed) {
+                  controller.add([]);
+                }
+              } catch (e, st) {
+                print('❌ [FirebaseChatCore getAllGroupSessionRoomsStream Error]: $e');
+                print(st);
+                if (!controller.isClosed) controller.addError(e);
+              }
+            },
+            onError: (err) {
+              print('❌ [FirebaseChatCore getAllGroupSessionRoomsStream onError]: $err');
+              if (!controller.isClosed) controller.addError(err);
+            },
+          );
+        } catch (e) {
+          print('❌ [FirebaseChatCore getAllGroupSessionRoomsStream catch]: $e');
+          if (!controller.isClosed) controller.addError(e);
+        }
+      },
+      onCancel: () {
+        subscription?.cancel();
+      },
+    );
 
     return controller.stream;
   }
@@ -258,7 +341,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
 
       final rooms = await _processRoomsQuery(querySnapshot);
       if (rooms.isNotEmpty) {
-        await ChatCacheManager.instance.saveRooms(currentUserId, rooms, isGroup: true);
+        await ChatCacheManager.instance.saveGroupRooms(currentUserId, rooms);
       }
       return rooms;
     } catch (e, st) {

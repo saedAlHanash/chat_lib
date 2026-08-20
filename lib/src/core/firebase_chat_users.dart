@@ -101,57 +101,55 @@ extension FirebaseChatUsers on FirebaseChatCore {
 
   /// Emits a stream of users, synchronized with Firestore and cached locally via Hive.
   Stream<List<types.User>> getUsersStream({Timestamp? updateTime}) {
-    final controller = StreamController<List<types.User>>.broadcast();
-    _initUsersStream(controller, updateTime);
-    return controller.stream;
-  }
-
-  Future<void> _initUsersStream(
-    StreamController<List<types.User>> controller,
-    Timestamp? updateTime,
-  ) async {
-    // 1. Emit cached users immediately
-    final cached = await ChatCacheManager.instance.getCachedUsers();
-    if (!controller.isClosed && cached.isNotEmpty) {
-      controller.add(cached);
-    }
-
-    final resolvedUpdateTime = updateTime ?? Timestamp.fromMillisecondsSinceEpoch(cached.firstOrNull?.updatedAt ?? 0);
-
-    // 2. Query Firestore and update cache + emit
+    late StreamController<List<types.User>> controller;
     StreamSubscription? subscription;
-    try {
-      subscription = usersQuery(resolvedUpdateTime).snapshots().listen(
-        (snapshot) async {
-          final usersList = _processUsersQuery(snapshot);
 
-          for (final user in usersList) {
-            if (user.firstName?.toLowerCase() == 'guest') {
-              await deleteUser(user.id);
-            }
-          }
+    controller = StreamController<List<types.User>>.broadcast(
+      onListen: () async {
+        // 1. Emit cached users immediately upon subscription
+        final cached = await ChatCacheManager.instance.getCachedUsers();
+        if (!controller.isClosed && cached.isNotEmpty) {
+          controller.add(cached);
+        }
 
-          final validUsers = usersList.where((u) => u.firstName?.toLowerCase() != 'guest' && u.id != '0').toList();
+        final resolvedUpdateTime = updateTime ?? Timestamp.fromMillisecondsSinceEpoch(cached.firstOrNull?.updatedAt ?? 0);
 
-          if (validUsers.isNotEmpty) {
-            await ChatCacheManager.instance.saveUsers(validUsers);
-            final updatedCached = await ChatCacheManager.instance.getCachedUsers();
-            if (!controller.isClosed) {
-              controller.add(updatedCached);
-            }
-          }
-        },
-        onError: (err) {
-          if (!controller.isClosed) controller.addError(err);
-        },
-      );
-    } catch (e) {
-      if (!controller.isClosed) controller.addError(e);
-    }
+        // 2. Query Firestore and update cache + emit
+        try {
+          subscription = usersQuery(resolvedUpdateTime).snapshots().listen(
+            (snapshot) async {
+              final usersList = _processUsersQuery(snapshot);
 
-    controller.onCancel = () {
-      subscription?.cancel();
-    };
+              for (final user in usersList) {
+                if (user.firstName?.toLowerCase() == 'guest') {
+                  await deleteUser(user.id);
+                }
+              }
+
+              final validUsers = usersList.where((u) => u.firstName?.toLowerCase() != 'guest' && u.id != '0').toList();
+
+              if (validUsers.isNotEmpty) {
+                await ChatCacheManager.instance.saveUsers(validUsers);
+                final updatedCached = await ChatCacheManager.instance.getCachedUsers();
+                if (!controller.isClosed) {
+                  controller.add(updatedCached);
+                }
+              }
+            },
+            onError: (err) {
+              if (!controller.isClosed) controller.addError(err);
+            },
+          );
+        } catch (e) {
+          if (!controller.isClosed) controller.addError(e);
+        }
+      },
+      onCancel: () {
+        subscription?.cancel();
+      },
+    );
+
+    return controller.stream;
   }
 
   /// Deletes a user document from Firestore users collection and local cache.

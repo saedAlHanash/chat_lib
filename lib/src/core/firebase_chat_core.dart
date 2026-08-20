@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:collection/collection.dart';
-import 'package:flutter/cupertino.dart';
+
 import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
 import '../../chat_lib.dart';
 import '../config/chat_config.dart';
@@ -10,6 +11,7 @@ import '../cache/chat_cache_manager.dart';
 part 'firebase_chat_users.dart';
 part 'firebase_chat_rooms.dart';
 part 'firebase_chat_group_rooms.dart';
+part 'firebase_chat_common_rooms.dart';
 part 'firebase_chat_messages.dart';
 part 'firebase_chat_helpers.dart';
 
@@ -36,6 +38,12 @@ class FirebaseChatCore {
   void initialize(ChatConfig config) {
     _config = config;
     _isInitialized = true;
+    ChatCacheManager.instance.init(
+      version: config.cacheVersion,
+      directRoomsSeedAssetPath: config.directRoomsSeedAssetPath,
+      groupRoomsSeedAssetPath: config.groupRoomsSeedAssetPath,
+      usersSeedAssetPath: config.usersSeedAssetPath,
+    );
   }
 
   /// Getters for configurations
@@ -65,4 +73,30 @@ class FirebaseChatCore {
     }
     return await _config.uploadDelegate!(filePath, mimeType: mimeType, customArgs: customArgs);
   }
+
+  /// Exports all cached direct rooms, group rooms, and users as individual JSON files into a directory.
+  Future<Map<String, String>> exportAllSeedFiles(
+    String directoryPath, {
+    String directRoomsKey = 'all_rooms',
+    String groupRoomsKey = 'all_group_rooms',
+    bool pretty = true,
+  }) =>
+      ChatCacheManager.instance.exportAllSeedFiles(
+        directoryPath,
+        directRoomsKey: directRoomsKey,
+        groupRoomsKey: groupRoomsKey,
+        pretty: pretty,
+      );
+
+  /// Seeds direct rooms from asset if the direct rooms box is empty.
+  Future<void> seedDirectRoomsFromAsset(String assetPath, {String userId = 'all_rooms'}) =>
+      ChatCacheManager.instance.seedDirectRoomsFromAsset(assetPath, userId: userId);
+
+  /// Seeds group rooms from asset if the group rooms box is empty.
+  Future<void> seedGroupRoomsFromAsset(String assetPath, {String userId = 'all_group_rooms'}) =>
+      ChatCacheManager.instance.seedGroupRoomsFromAsset(assetPath, userId: userId);
+
+  /// Seeds users from asset if the users box is empty.
+  Future<void> seedUsersFromAsset(String assetPath) =>
+      ChatCacheManager.instance.seedUsersFromAsset(assetPath);
 }

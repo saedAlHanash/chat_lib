@@ -3,7 +3,7 @@ part of 'firebase_chat_core.dart';
 /// Internal document processing and log helpers extension on [FirebaseChatCore].
 extension FirebaseChatHelpers on FirebaseChatCore {
   String _getCollectionForRoom(String roomId) {
-    if (RegExp(r'^\d+$').hasMatch(roomId)) {
+    if (roomId.isGroupRoomId) {
       return _config.groupSessionRoomsCollection;
     }
     return _config.roomsCollection;
@@ -83,37 +83,19 @@ extension FirebaseChatHelpers on FirebaseChatCore {
     // Set latest seen metadata
     final Map<String, dynamic> metadata = Map<String, dynamic>.from(data['metadata'] ?? {});
 
-    // Fetch members sub-collection and populate userRoles and userPermissions
-    final collectionName = _getCollectionForRoom(doc.id);
-    final membersSnap = await _firestore.collection(collectionName).doc(doc.id).collection('members').get();
-
+    // Populate userRoles and userPermissions from room doc if available, or default
     final userRoles = <String, String>{};
     final userPermissions = <String, Map<String, dynamic>>{};
 
-    if (membersSnap.docs.isNotEmpty) {
-      for (final memberDoc in membersSnap.docs) {
-        final mData = memberDoc.data();
-        final mUserId = memberDoc.id;
-        final mRole = mData['role'] as String? ?? 'user';
-        userRoles[mUserId] = mRole;
-        userPermissions[mUserId] = {
-          'canSendMessages': mData['canSendMessages'] ?? true,
-          'canSendMedia': mData['canSendMedia'] ?? true,
-          'isBanned': mData['isBanned'] ?? false,
-        };
-      }
-    } else {
-      // Fallback to legacy fields if sub-collection is empty
-      if (data['userRoles'] != null) {
-        userRoles.addAll(Map<String, String>.from(data['userRoles'] as Map));
-      }
-      if (metadata['userPermissions'] != null) {
-        userPermissions.addAll(
-          Map<String, Map<String, dynamic>>.from(
-            (metadata['userPermissions'] as Map).map((k, v) => MapEntry(k as String, Map<String, dynamic>.from(v as Map))),
-          ),
-        );
-      }
+    if (data['userRoles'] != null) {
+      userRoles.addAll(Map<String, String>.from(data['userRoles'] as Map));
+    }
+    if (metadata['userPermissions'] != null) {
+      userPermissions.addAll(
+        Map<String, Map<String, dynamic>>.from(
+          (metadata['userPermissions'] as Map).map((k, v) => MapEntry(k as String, Map<String, dynamic>.from(v as Map))),
+        ),
+      );
     }
 
     data['userRoles'] = userRoles;
