@@ -232,6 +232,10 @@ extension FirebaseChatMessages on FirebaseChatCore {
                 if (!controller.isClosed) {
                   controller.add(updatedCached);
                 }
+              } else if (!controller.isClosed) {
+                final currentCached = await ChatCacheManager.instance.getCachedMessages(roomId);
+                currentCached.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
+                controller.add(currentCached);
               }
             },
             onError: (err) {

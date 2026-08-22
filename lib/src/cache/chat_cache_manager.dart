@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:hive_ce_flutter/hive_ce_flutter.dart';
 import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
@@ -50,17 +51,6 @@ class ChatCacheManager {
         await newMetaBox.put(ChatCacheBoxes.versionKey, targetVersion);
       }
 
-      // Seed users first so room hydration can look up user objects
-      if (usersSeedAssetPath != null && usersSeedAssetPath.isNotEmpty) {
-        await seedUsersFromAsset(usersSeedAssetPath);
-      }
-      if (directRoomsSeedAssetPath != null && directRoomsSeedAssetPath.isNotEmpty) {
-        await seedDirectRoomsFromAsset(directRoomsSeedAssetPath, userId: directRoomsKey);
-      }
-      if (groupRoomsSeedAssetPath != null && groupRoomsSeedAssetPath.isNotEmpty) {
-        await seedGroupRoomsFromAsset(groupRoomsSeedAssetPath, userId: groupRoomsKey);
-      }
-
       _isInitialized = true;
       _initCompleter!.complete();
     } catch (e, st) {
@@ -101,6 +91,32 @@ class ChatCacheManager {
     return Hive.openBox<Map>(ChatCacheBoxes.usersBox);
   }
 
+  /// Seeds all data from configured asset paths if caches are empty.
+  Future<void> seedFromConfig({
+    String? usersSeedAssetPath,
+    String? directRoomsSeedAssetPath,
+    String? groupRoomsSeedAssetPath,
+    String directRoomsKey = ChatCacheBoxes.allRoomsKey,
+    String groupRoomsKey = ChatCacheBoxes.allGroupRoomsKey,
+    void Function(String step, double progress)? onProgress,
+  }) async {
+    await init();
+
+    if (usersSeedAssetPath != null && usersSeedAssetPath.isNotEmpty) {
+      onProgress?.call('مزامنة المستخدمين...', 0.2);
+      await seedUsersFromAsset(usersSeedAssetPath);
+    }
+    if (directRoomsSeedAssetPath != null && directRoomsSeedAssetPath.isNotEmpty) {
+      onProgress?.call('مزامنة المحادثات المباشرة...', 0.6);
+      await seedDirectRoomsFromAsset(directRoomsSeedAssetPath, userId: directRoomsKey);
+    }
+    if (groupRoomsSeedAssetPath != null && groupRoomsSeedAssetPath.isNotEmpty) {
+      onProgress?.call('مزامنة المجموعات...', 0.9);
+      await seedGroupRoomsFromAsset(groupRoomsSeedAssetPath, userId: groupRoomsKey);
+    }
+    onProgress?.call('اكتملت المزامنة', 1.0);
+  }
+
   // --- Individual Seed Operations (Applied only if box is empty) ---
 
   /// Seeds users from an asset file ONLY IF the users box is currently empty.
@@ -110,13 +126,7 @@ class ChatCacheManager {
       if (box.isNotEmpty) return;
 
       final jsonStr = await rootBundle.loadString(assetPath);
-      final list = jsonDecode(jsonStr) as List? ?? [];
-      final map = <String, Map>{};
-      for (final item in list) {
-        if (item is Map && item['id'] != null && item['id'].toString() != '0') {
-          map[item['id'].toString()] = item;
-        }
-      }
+      final map = await compute(_parseUsersSeedJson, jsonStr);
       if (map.isNotEmpty) {
         await box.putAll(map);
       }
@@ -131,15 +141,12 @@ class ChatCacheManager {
       final box = await Hive.openBox<Map>(ChatCacheBoxes.directRoomsBox(userId));
       if (box.isNotEmpty) return;
 
+      final usersBox = await _openUsersBox();
+      final usersMap = Map<String, Map>.from(usersBox.toMap());
+
       final jsonStr = await rootBundle.loadString(assetPath);
-      final list = jsonDecode(jsonStr) as List? ?? [];
-      final map = <String, Map>{};
-      for (final item in list) {
-        if (item is Map && item['id'] != null) {
-          final hydratedRoom = await _hydrateRoomFromCache(item);
-          map[item['id'].toString()] = hydratedRoom;
-        }
-      }
+      final map = await compute(_parseAndHydrateRoomsJson, _RoomHydratePayload(jsonStr: jsonStr, usersMap: usersMap));
+
       if (map.isNotEmpty) {
         await box.putAll(map);
       }
@@ -154,21 +161,25 @@ class ChatCacheManager {
       final box = await Hive.openBox<Map>(ChatCacheBoxes.groupRoomsBox(userId));
       if (box.isNotEmpty) return;
 
+      final usersBox = await _openUsersBox();
+      final usersMap = Map<String, Map>.from(usersBox.toMap());
+
       final jsonStr = await rootBundle.loadString(assetPath);
-      final list = jsonDecode(jsonStr) as List? ?? [];
-      final map = <String, Map>{};
-      for (final item in list) {
-        if (item is Map && item['id'] != null) {
-          final hydratedRoom = await _hydrateRoomFromCache(item);
-          map[item['id'].toString()] = hydratedRoom;
-        }
-      }
+      final map = await compute(_parseAndHydrateRoomsJson, _RoomHydratePayload(jsonStr: jsonStr, usersMap: usersMap));
+
       if (map.isNotEmpty) {
         await box.putAll(map);
       }
     } catch (e) {
       print('⚠️ [ChatCacheManager seedGroupRoomsFromAsset error]: $e');
     }
+  }
+
+  /// Checks if cache needs sync (e.g. users box is empty)
+  Future<bool> isCacheEmpty() async {
+    await init();
+    final usersBox = await _openUsersBox();
+    return usersBox.isEmpty;
   }
 
   // --- Export Operations ---
@@ -202,11 +213,7 @@ class ChatCacheManager {
           if (user != null) {
             hydratedUsers.add(user.toJson());
           } else {
-            hydratedUsers.add({
-              'id': userId,
-              'firstName': '',
-              'role': 'user',
-            });
+            hydratedUsers.add({'id': userId, 'firstName': '', 'role': 'user'});
           }
         }
       }
@@ -243,11 +250,7 @@ class ChatCacheManager {
     await File(groupPath).writeAsString(encoder.convert(groupRooms));
     await File(usersPath).writeAsString(encoder.convert(users));
 
-    return {
-      'directRooms': directPath,
-      'groupRooms': groupPath,
-      'users': usersPath,
-    };
+    return {'directRooms': directPath, 'groupRooms': groupPath, 'users': usersPath};
   }
 
   // --- Direct Rooms Cache Operations ---
@@ -305,13 +308,12 @@ class ChatCacheManager {
       }
     }
 
-    return rooms
-      ..sort((a, b) {
-        if (a.isNotRead != b.isNotRead) {
-          return a.isNotRead ? -1 : 1;
-        }
-        return (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0);
-      });
+    return rooms..sort((a, b) {
+      if (a.isNotRead != b.isNotRead) {
+        return a.isNotRead ? -1 : 1;
+      }
+      return (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0);
+    });
   }
 
   // --- Group Rooms Cache Operations ---
@@ -369,13 +371,12 @@ class ChatCacheManager {
       }
     }
 
-    return rooms
-      ..sort((a, b) {
-        if (a.isNotRead != b.isNotRead) {
-          return a.isNotRead ? -1 : 1;
-        }
-        return (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0);
-      });
+    return rooms..sort((a, b) {
+      if (a.isNotRead != b.isNotRead) {
+        return a.isNotRead ? -1 : 1;
+      }
+      return (b.updatedAt ?? 0).compareTo(a.updatedAt ?? 0);
+    });
   }
 
   // --- Messages Cache Operations ---
@@ -419,8 +420,7 @@ class ChatCacheManager {
           final createdAt = castedMap['createdAt'] is num ? (castedMap['createdAt'] as num).toInt() : 0;
 
           // Delete files/videos older than a month, or soft deleted messages
-          final isOldAttachment = (type == 'file' || type == 'video') &&
-              (nowTimeMillis - createdAt).abs() > 2592000000;
+          final isOldAttachment = (type == 'file' || type == 'video') && (nowTimeMillis - createdAt).abs() > 2592000000;
 
           if (isDeleted || isOldAttachment) {
             expiredKeys.add(key.toString());
@@ -441,8 +441,7 @@ class ChatCacheManager {
       });
     }
 
-    return messages
-      ..sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
+    return messages..sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
   }
 
   /// Clear messages box for a room.
@@ -553,4 +552,57 @@ class ChatCacheManager {
       }
     }
   }
+}
+
+Map<String, Map> _parseUsersSeedJson(String jsonStr) {
+  final list = jsonDecode(jsonStr) as List? ?? [];
+  final map = <String, Map>{};
+  for (final item in list) {
+    if (item is Map && item['id'] != null && item['id'].toString() != '0') {
+      map[item['id'].toString()] = item;
+    }
+  }
+  return map;
+}
+
+List<dynamic> _parseRawListJson(String jsonStr) {
+  return jsonDecode(jsonStr) as List? ?? [];
+}
+
+class _RoomHydratePayload {
+  final String jsonStr;
+  final Map<String, Map> usersMap;
+
+  _RoomHydratePayload({required this.jsonStr, required this.usersMap});
+}
+
+Map<String, Map> _parseAndHydrateRoomsJson(_RoomHydratePayload payload) {
+  final list = jsonDecode(payload.jsonStr) as List? ?? [];
+  final map = <String, Map>{};
+
+  for (final item in list) {
+    if (item is Map && item['id'] != null) {
+      final roomMap = Map<String, dynamic>.from(item);
+      if (roomMap['users'] is List) {
+        final usersList = roomMap['users'] as List;
+        final hydratedUsers = <Map<String, dynamic>>[];
+        for (final u in usersList) {
+          if (u is Map) {
+            hydratedUsers.add(Map<String, dynamic>.from(u));
+          } else {
+            final userId = u.toString();
+            final cachedUser = payload.usersMap[userId];
+            if (cachedUser != null) {
+              hydratedUsers.add(Map<String, dynamic>.from(cachedUser));
+            } else {
+              hydratedUsers.add({'id': userId, 'firstName': '', 'role': 'user'});
+            }
+          }
+        }
+        roomMap['users'] = hydratedUsers;
+      }
+      map[item['id'].toString()] = roomMap;
+    }
+  }
+  return map;
 }

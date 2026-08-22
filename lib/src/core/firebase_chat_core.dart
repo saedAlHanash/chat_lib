@@ -99,4 +99,19 @@ class FirebaseChatCore {
   /// Seeds users from asset if the users box is empty.
   Future<void> seedUsersFromAsset(String assetPath) =>
       ChatCacheManager.instance.seedUsersFromAsset(assetPath);
+
+  /// Seeds all caches from configured seed assets.
+  Future<void> syncSeedData({void Function(String step, double progress)? onProgress}) {
+    _checkInitialized();
+    return ChatCacheManager.instance.seedFromConfig(
+      usersSeedAssetPath: _config.usersSeedAssetPath,
+      directRoomsSeedAssetPath: _config.directRoomsSeedAssetPath,
+      groupRoomsSeedAssetPath: _config.groupRoomsSeedAssetPath,
+      onProgress: onProgress,
+    );
+  }
+
+  /// Checks if local cache is empty.
+  Future<bool> isCacheEmpty() => ChatCacheManager.instance.isCacheEmpty();
 }
+
