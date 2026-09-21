@@ -3,7 +3,7 @@ part of 'firebase_chat_core.dart';
 /// Messages operations extension on [FirebaseChatCore].
 extension FirebaseChatMessages on FirebaseChatCore {
   /// Query for messages in a room.
-  Query<Map<String, dynamic>> messagesQuery(Timestamp? updateTime, String roomId) {
+  Query<Map<String, dynamic>> _messagesQuery(Timestamp? updateTime, String roomId) {
     final collection = _getCollectionForRoom(roomId);
     return _firestore
         .collection('$collection/$roomId/messages')
@@ -221,7 +221,7 @@ extension FirebaseChatMessages on FirebaseChatCore {
 
         // 2. Query Firestore and update cache + emit
         try {
-          subscription = messagesQuery(resolvedUpdateTime, roomId).snapshots().listen(
+          subscription = _messagesQuery(resolvedUpdateTime, roomId).snapshots().listen(
             (snapshot) async {
               final messagesList = await _processMessagesQuery(snapshot);
 

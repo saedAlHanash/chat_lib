@@ -227,7 +227,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
         }
 
         final resolvedUpdateTime = listFromCache.isNotEmpty
-            ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
+            ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.map((r) => r.updatedAt ?? 0).fold<int>(0, math.max))
             : null;
 
         // 2. Query Firestore and update cache + emit
@@ -283,7 +283,7 @@ extension FirebaseChatGroupRooms on FirebaseChatCore {
         }
 
         final resolvedUpdateTime = updateTime ?? (listFromCache.isNotEmpty
-            ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.firstOrNull?.updatedAt ?? 0)
+            ? Timestamp.fromMillisecondsSinceEpoch(listFromCache.map((r) => r.updatedAt ?? 0).fold<int>(0, math.max))
             : null);
 
         // 2. Query Firestore and update cache + emit

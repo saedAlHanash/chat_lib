@@ -92,7 +92,7 @@ extension FirebaseChatUsers on FirebaseChatCore {
   }
 
   /// Query for users in Firestore.
-  Query<Map<String, dynamic>> usersQuery(Timestamp? updateTime) {
+  Query<Map<String, dynamic>> _usersQuery(Timestamp? updateTime) {
     return _firestore
         .collection(_config.usersCollection)
         .orderBy('updatedAt', descending: true)
@@ -116,7 +116,7 @@ extension FirebaseChatUsers on FirebaseChatCore {
 
         // 2. Query Firestore and update cache + emit
         try {
-          subscription = usersQuery(resolvedUpdateTime).snapshots().listen(
+          subscription = _usersQuery(resolvedUpdateTime).snapshots().listen(
             (snapshot) async {
               final usersList = _processUsersQuery(snapshot);
 
