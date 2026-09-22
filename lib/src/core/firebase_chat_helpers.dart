@@ -35,14 +35,17 @@ extension FirebaseChatHelpers on FirebaseChatCore {
 
     var imageUrl = data['imageUrl'] as String?;
     var name = data['name'] as String?;
-    final type = data['type'] as String? ?? types.RoomType.direct.toShortString();
-    final userIds = (data['userIds'] as List<dynamic>?) ?? [];
+    var userIds = (data['userIds'] as List<dynamic>?) ?? [];
+    if (userIds.isEmpty && doc.id.contains('_')) {
+      userIds = doc.id.split('_');
+    }
 
     final users = await Future.wait(userIds.map((userId) => fetchUser(userId.toString())));
     final otherUserId = userIds.firstWhereOrNull((uId) => uId.toString() != currentUserId)?.toString();
     final otherUser = users.firstWhereOrNull((u) => u.id != currentUserId);
 
-    if (type == types.RoomType.direct.toShortString() && otherUser != null) {
+    final roomType = data['type'] as String?;
+    if (roomType == types.RoomType.direct.toShortString() && otherUser != null) {
       imageUrl = otherUser.imageUrl;
       name = '${otherUser.firstName} ${otherUser.lastName ?? ''}'.trim();
     }

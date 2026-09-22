@@ -91,56 +91,56 @@ class ChatCacheManager {
     return Hive.openBox<Map>(ChatCacheBoxes.usersBox);
   }
 
-  /// Seeds all data from configured asset paths if caches are empty.
+  /// Seeds all data from configured asset paths if caches are empty or need merge.
   Future<void> seedFromConfig({
     String? usersSeedAssetPath,
     String? directRoomsSeedAssetPath,
     String? groupRoomsSeedAssetPath,
     String directRoomsKey = ChatCacheBoxes.allRoomsKey,
     String groupRoomsKey = ChatCacheBoxes.allGroupRoomsKey,
+    bool force = false,
     void Function(String step, double progress)? onProgress,
   }) async {
     await init();
 
     if (usersSeedAssetPath != null && usersSeedAssetPath.isNotEmpty) {
       onProgress?.call('مزامنة المستخدمين...', 0.2);
-      await seedUsersFromAsset(usersSeedAssetPath);
+      await seedUsersFromAsset(usersSeedAssetPath, force: force);
     }
     if (directRoomsSeedAssetPath != null && directRoomsSeedAssetPath.isNotEmpty) {
       onProgress?.call('مزامنة المحادثات المباشرة...', 0.6);
-      await seedDirectRoomsFromAsset(directRoomsSeedAssetPath, userId: directRoomsKey);
+      await seedDirectRoomsFromAsset(directRoomsSeedAssetPath, userId: directRoomsKey, force: force);
     }
     if (groupRoomsSeedAssetPath != null && groupRoomsSeedAssetPath.isNotEmpty) {
       onProgress?.call('مزامنة المجموعات...', 0.9);
-      await seedGroupRoomsFromAsset(groupRoomsSeedAssetPath, userId: groupRoomsKey);
+      await seedGroupRoomsFromAsset(groupRoomsSeedAssetPath, userId: groupRoomsKey, force: force);
     }
     onProgress?.call('اكتملت المزامنة', 1.0);
   }
 
-  // --- Individual Seed Operations (Applied only if box is empty) ---
+  // --- Individual Seed Operations ---
 
-  /// Seeds users from an asset file ONLY IF the users box is currently empty.
-  Future<void> seedUsersFromAsset(String assetPath) async {
+  /// Seeds users from an asset file. Merges if box is empty, force is true, or box.length < map.length.
+  Future<void> seedUsersFromAsset(String assetPath, {bool force = false}) async {
     try {
       final box = await Hive.openBox<Map>(ChatCacheBoxes.usersBox);
-      if (box.isNotEmpty) return;
-
       final jsonStr = await rootBundle.loadString(assetPath);
       final map = await compute(_parseUsersSeedJson, jsonStr);
       if (map.isNotEmpty) {
-        await box.putAll(map);
+        if (box.isEmpty || force || box.length < map.length) {
+          if (force) await box.clear();
+          await box.putAll(map);
+        }
       }
     } catch (e) {
       print('⚠️ [ChatCacheManager seedUsersFromAsset error]: $e');
     }
   }
 
-  /// Seeds direct rooms from an asset file ONLY IF the direct rooms box is currently empty.
-  Future<void> seedDirectRoomsFromAsset(String assetPath, {String userId = ChatCacheBoxes.allRoomsKey}) async {
+  /// Seeds direct rooms from an asset file. Merges if box is empty, force is true, or box.length < map.length.
+  Future<void> seedDirectRoomsFromAsset(String assetPath, {String userId = ChatCacheBoxes.allRoomsKey, bool force = false}) async {
     try {
       final box = await Hive.openBox<Map>(ChatCacheBoxes.directRoomsBox(userId));
-      if (box.isNotEmpty) return;
-
       final usersBox = await _openUsersBox();
       final usersMap = Map<String, Map>.from(usersBox.toMap());
 
@@ -148,19 +148,20 @@ class ChatCacheManager {
       final map = await compute(_parseAndHydrateRoomsJson, _RoomHydratePayload(jsonStr: jsonStr, usersMap: usersMap));
 
       if (map.isNotEmpty) {
-        await box.putAll(map);
+        if (box.isEmpty || force || box.length < map.length) {
+          if (force) await box.clear();
+          await box.putAll(map);
+        }
       }
     } catch (e) {
       print('⚠️ [ChatCacheManager seedDirectRoomsFromAsset error]: $e');
     }
   }
 
-  /// Seeds group rooms from an asset file ONLY IF the group rooms box is currently empty.
-  Future<void> seedGroupRoomsFromAsset(String assetPath, {String userId = ChatCacheBoxes.allGroupRoomsKey}) async {
+  /// Seeds group rooms from an asset file. Merges if box is empty, force is true, or box.length < map.length.
+  Future<void> seedGroupRoomsFromAsset(String assetPath, {String userId = ChatCacheBoxes.allGroupRoomsKey, bool force = false}) async {
     try {
       final box = await Hive.openBox<Map>(ChatCacheBoxes.groupRoomsBox(userId));
-      if (box.isNotEmpty) return;
-
       final usersBox = await _openUsersBox();
       final usersMap = Map<String, Map>.from(usersBox.toMap());
 
@@ -168,7 +169,10 @@ class ChatCacheManager {
       final map = await compute(_parseAndHydrateRoomsJson, _RoomHydratePayload(jsonStr: jsonStr, usersMap: usersMap));
 
       if (map.isNotEmpty) {
-        await box.putAll(map);
+        if (box.isEmpty || force || box.length < map.length) {
+          if (force) await box.clear();
+          await box.putAll(map);
+        }
       }
     } catch (e) {
       print('⚠️ [ChatCacheManager seedGroupRoomsFromAsset error]: $e');
@@ -194,30 +198,6 @@ class ChatCacheManager {
         }
         return u.toString();
       }).toList();
-    }
-    return map;
-  }
-
-  /// Hydrates a room map from cache by looking up user profiles for each ID in `users`.
-  Future<Map<String, dynamic>> _hydrateRoomFromCache(Map roomMap) async {
-    final map = _deepCastMap(roomMap);
-    if (map['users'] is List) {
-      final usersList = map['users'] as List;
-      final hydratedUsers = <Map<String, dynamic>>[];
-      for (final u in usersList) {
-        if (u is Map) {
-          hydratedUsers.add(_deepCastMap(u));
-        } else {
-          final userId = u.toString();
-          final user = await getCachedUser(userId);
-          if (user != null) {
-            hydratedUsers.add(user.toJson());
-          } else {
-            hydratedUsers.add({'id': userId, 'firstName': '', 'role': 'user'});
-          }
-        }
-      }
-      map['users'] = hydratedUsers;
     }
     return map;
   }
@@ -303,8 +283,8 @@ class ChatCacheManager {
         if (!room.shouldHideForUser(targetUserId)) {
           rooms.add(room);
         }
-      } catch (e) {
-        print('❌ [getCachedDirectRooms Error]: $e');
+      } catch (e, st) {
+        print('❌ [getCachedDirectRooms Error]: $e \n$st\n$value');
       }
     }
 
@@ -463,7 +443,7 @@ class ChatCacheManager {
     final box = await _openUsersBox();
     final map = <String, Map>{};
     for (final user in users) {
-      if (user.firstName?.toLowerCase() == 'guest' || user.id == '0') continue;
+      if (user.id == '0') continue;
       map[user.id] = user.toJson();
     }
     if (map.isNotEmpty) {
@@ -478,9 +458,6 @@ class ChatCacheManager {
     for (final value in box.values) {
       try {
         final casted = _deepCastMap(value);
-        if (casted['firstName']?.toString().toLowerCase() == 'guest') {
-          continue;
-        }
         users.add(types.User.fromJson(casted));
       } catch (_) {}
     }
@@ -531,22 +508,47 @@ class ChatCacheManager {
   }
 
   void _sanitizeRoomMap(Map<String, dynamic> roomMap) {
+    if (roomMap['metadata'] is! Map) {
+      roomMap['metadata'] = <String, dynamic>{};
+    }
+    if (roomMap['users'] is! List) {
+      if (roomMap['userIds'] is List) {
+        roomMap['users'] = roomMap['userIds'];
+      } else {
+        roomMap['users'] = <dynamic>[];
+      }
+    }
     if (roomMap['users'] is List) {
-      for (final u in roomMap['users']) {
+      for (final u in (roomMap['users'] as List)) {
         if (u is Map) {
           final r = u['role']?.toString().toLowerCase();
           if (r != 'admin' && r != 'agent' && r != 'moderator' && r != 'user') {
             u['role'] = 'user';
           }
+          // metadata must be Map or absent — never List
+          if (u['metadata'] != null && u['metadata'] is! Map) {
+            u.remove('metadata');
+          }
         }
       }
     }
     if (roomMap['lastMessages'] is List) {
-      for (final m in roomMap['lastMessages']) {
-        if (m is Map && m['author'] is Map) {
-          final r = m['author']['role']?.toString().toLowerCase();
-          if (r != 'admin' && r != 'agent' && r != 'moderator' && r != 'user') {
-            m['author']['role'] = 'user';
+      for (final m in (roomMap['lastMessages'] as List)) {
+        if (m is Map) {
+          // sanitize message metadata
+          if (m['metadata'] != null && m['metadata'] is! Map) {
+            m.remove('metadata');
+          }
+          if (m['author'] is Map) {
+            final author = m['author'] as Map;
+            final r = author['role']?.toString().toLowerCase();
+            if (r != 'admin' && r != 'agent' && r != 'moderator' && r != 'user') {
+              author['role'] = 'user';
+            }
+            // author.metadata must be Map or absent
+            if (author['metadata'] != null && author['metadata'] is! Map) {
+              author.remove('metadata');
+            }
           }
         }
       }
@@ -565,9 +567,7 @@ Map<String, Map> _parseUsersSeedJson(String jsonStr) {
   return map;
 }
 
-List<dynamic> _parseRawListJson(String jsonStr) {
-  return jsonDecode(jsonStr) as List? ?? [];
-}
+
 
 class _RoomHydratePayload {
   final String jsonStr;
@@ -582,27 +582,58 @@ Map<String, Map> _parseAndHydrateRoomsJson(_RoomHydratePayload payload) {
 
   for (final item in list) {
     if (item is Map && item['id'] != null) {
-      final roomMap = Map<String, dynamic>.from(item);
-      if (roomMap['users'] is List) {
-        final usersList = roomMap['users'] as List;
-        final hydratedUsers = <Map<String, dynamic>>[];
-        for (final u in usersList) {
-          if (u is Map) {
-            hydratedUsers.add(Map<String, dynamic>.from(u));
+      final roomMap = _deepCastMapStatic(item);
+      if (roomMap['metadata'] is! Map) {
+        roomMap['metadata'] = <String, dynamic>{};
+      }
+      final roomId = item['id'].toString();
+      final rawUsers = roomMap['users'] ?? roomMap['userIds'] ?? [];
+      var usersList = (rawUsers is List) ? List.from(rawUsers) : [];
+      if (usersList.isEmpty && roomId.contains('_')) {
+        usersList = roomId.split('_');
+      }
+      final hydratedUsers = <Map<String, dynamic>>[];
+      for (final u in usersList) {
+        if (u is Map) {
+          final userMap = _deepCastMapStatic(u);
+          if (userMap['metadata'] is! Map) userMap.remove('metadata');
+          hydratedUsers.add(userMap);
+        } else {
+          final userId = u.toString();
+          final cachedUser = payload.usersMap[userId];
+          if (cachedUser != null) {
+            final userMap = _deepCastMapStatic(cachedUser);
+            if (userMap['metadata'] is! Map) userMap.remove('metadata');
+            hydratedUsers.add(userMap);
           } else {
-            final userId = u.toString();
-            final cachedUser = payload.usersMap[userId];
-            if (cachedUser != null) {
-              hydratedUsers.add(Map<String, dynamic>.from(cachedUser));
-            } else {
-              hydratedUsers.add({'id': userId, 'firstName': '', 'role': 'user'});
-            }
+            hydratedUsers.add({'id': userId, 'firstName': 'User $userId', 'role': 'user'});
           }
         }
-        roomMap['users'] = hydratedUsers;
       }
+      roomMap['users'] = hydratedUsers;
       map[item['id'].toString()] = roomMap;
     }
   }
   return map;
 }
+
+/// Top-level deep cast for use inside isolates (no instance access).
+Map<String, dynamic> _deepCastMapStatic(Map map) {
+  return map.map((key, value) {
+    final stringKey = key.toString();
+    if (value is Map) {
+      return MapEntry(stringKey, _deepCastMapStatic(value));
+    } else if (value is List) {
+      return MapEntry(
+        stringKey,
+        value.map((item) {
+          if (item is Map) return _deepCastMapStatic(item);
+          return item;
+        }).toList(),
+      );
+    } else {
+      return MapEntry(stringKey, value);
+    }
+  });
+}
+

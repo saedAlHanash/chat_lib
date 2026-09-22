@@ -120,13 +120,7 @@ extension FirebaseChatUsers on FirebaseChatCore {
             (snapshot) async {
               final usersList = _processUsersQuery(snapshot);
 
-              for (final user in usersList) {
-                if (user.firstName?.toLowerCase() == 'guest') {
-                  await deleteUser(user.id);
-                }
-              }
-
-              final validUsers = usersList.where((u) => u.firstName?.toLowerCase() != 'guest' && u.id != '0').toList();
+              final validUsers = usersList.where((u) => u.id != '0').toList();
 
               if (validUsers.isNotEmpty) {
                 await ChatCacheManager.instance.saveUsers(validUsers);

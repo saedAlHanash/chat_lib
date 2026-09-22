@@ -1,13 +1,10 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:collection/collection.dart';
 
 import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
 import '../../chat_lib.dart';
-import '../config/chat_config.dart';
-import '../cache/chat_cache_manager.dart';
 
 part 'firebase_chat_users.dart';
 part 'firebase_chat_rooms.dart';
@@ -93,21 +90,22 @@ class FirebaseChatCore {
   Future<void> seedDirectRoomsFromAsset(String assetPath, {String userId = ChatCacheBoxes.allRoomsKey}) =>
       ChatCacheManager.instance.seedDirectRoomsFromAsset(assetPath, userId: userId);
 
-  /// Seeds group rooms from asset if the group rooms box is empty.
-  Future<void> seedGroupRoomsFromAsset(String assetPath, {String userId = ChatCacheBoxes.allGroupRoomsKey}) =>
-      ChatCacheManager.instance.seedGroupRoomsFromAsset(assetPath, userId: userId);
+  /// Seeds group rooms from asset.
+  Future<void> seedGroupRoomsFromAsset(String assetPath, {String userId = ChatCacheBoxes.allGroupRoomsKey, bool force = false}) =>
+      ChatCacheManager.instance.seedGroupRoomsFromAsset(assetPath, userId: userId, force: force);
 
-  /// Seeds users from asset if the users box is empty.
-  Future<void> seedUsersFromAsset(String assetPath) =>
-      ChatCacheManager.instance.seedUsersFromAsset(assetPath);
+  /// Seeds users from asset.
+  Future<void> seedUsersFromAsset(String assetPath, {bool force = false}) =>
+      ChatCacheManager.instance.seedUsersFromAsset(assetPath, force: force);
 
   /// Seeds all caches from configured seed assets.
-  Future<void> syncSeedData({void Function(String step, double progress)? onProgress}) {
+  Future<void> syncSeedData({bool force = false, void Function(String step, double progress)? onProgress}) {
     _checkInitialized();
     return ChatCacheManager.instance.seedFromConfig(
       usersSeedAssetPath: _config.usersSeedAssetPath,
       directRoomsSeedAssetPath: _config.directRoomsSeedAssetPath,
       groupRoomsSeedAssetPath: _config.groupRoomsSeedAssetPath,
+      force: force,
       onProgress: onProgress,
     );
   }

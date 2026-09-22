@@ -61,9 +61,10 @@ extension RoomLibExtension on types.Room {
   /// Checks if a user (defaults to current user) is an admin in this room.
   bool isAdmin([String? targetUserId]) {
     final uid = targetUserId ?? currentUserId;
-    final userRoles = metadata?['userRoles'] as Map<String, dynamic>?;
-    if (userRoles != null && userRoles[uid] != null) {
-      return userRoles[uid] == 'admin';
+    final raw = metadata?['userRoles'];
+    if (raw is Map) {
+      final userRoles = raw as Map<String, dynamic>;
+      if (userRoles[uid] != null) return userRoles[uid] == 'admin';
     }
     final adminId = metadata?['adminId'] as String?;
     if (adminId == uid) return true;
@@ -76,9 +77,11 @@ extension RoomLibExtension on types.Room {
   /// Gets permissions map for a target user.
   Map<String, dynamic>? getUserPermissions([String? targetUserId]) {
     final uid = targetUserId ?? currentUserId;
-    final permissions = metadata?['userPermissions'] as Map<String, dynamic>?;
-    if (permissions != null && permissions[uid] != null) {
-      return Map<String, dynamic>.from(permissions[uid]);
+    final raw = metadata?['userPermissions'];
+    if (raw is! Map) return null;
+    final permissions = raw as Map<String, dynamic>;
+    if (permissions[uid] != null) {
+      return Map<String, dynamic>.from(permissions[uid] as Map);
     }
     return null;
   }
@@ -113,6 +116,9 @@ extension RoomLibExtension on types.Room {
   /// Checks if the entire room is soft-deleted.
   bool get isDeleted => metadata?['isDeleted'] == true;
 
+  /// Timestamp when the room was soft-deleted (if any).
+  int? get deletedAt => metadata?['deletedAt'] is int ? metadata!['deletedAt'] as int : null;
+
   /// Checks if a user is marked as removed, left, or inactive in this group.
   bool isUserRemoved([String? targetUserId]) {
     final uid = targetUserId ?? currentUserId;
@@ -136,8 +142,18 @@ extension RoomLibExtension on types.Room {
 
 /// Extension methods for [types.User] in the chat package.
 extension UserLibExtension on types.User {
-  /// Full name of user.
-  String get name => '${firstName ?? ''} ${lastName ?? ''}'.trim();
+  /// Full name of user with fallback.
+  String get name {
+    final fullName = '${firstName ?? ''} ${lastName ?? ''}'.trim();
+    if (fullName.isNotEmpty) {
+      if (fullName.toLowerCase() == 'guest') {
+        return 'Guest ($id)';
+      }
+      return fullName;
+    }
+    if (id.isNotEmpty && id != '-1' && id != '0') return 'User $id';
+    return 'مستخدم';
+  }
 
   /// Email of user from metadata.
   String get email => metadata?['email']?.toString() ?? '';
