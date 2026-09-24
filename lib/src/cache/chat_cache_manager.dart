@@ -49,6 +49,17 @@ class ChatCacheManager {
         await purgeAllCache();
         final newMetaBox = await Hive.openBox<dynamic>(ChatCacheBoxes.metaBox);
         await newMetaBox.put(ChatCacheBoxes.versionKey, targetVersion);
+
+        if (usersSeedAssetPath != null || directRoomsSeedAssetPath != null || groupRoomsSeedAssetPath != null) {
+          await seedFromConfig(
+            usersSeedAssetPath: usersSeedAssetPath,
+            directRoomsSeedAssetPath: directRoomsSeedAssetPath,
+            groupRoomsSeedAssetPath: groupRoomsSeedAssetPath,
+            directRoomsKey: directRoomsKey,
+            groupRoomsKey: groupRoomsKey,
+            force: true,
+          );
+        }
       }
 
       _isInitialized = true;
